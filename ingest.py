@@ -1,392 +1,570 @@
-import os
-import sys
 import datetime
+import os
+import re
+import time
 import logging
+import feedparser
+import httpx
 import pandas as pd
-from sqlalchemy import create_engine, text, bindparam
-from sqlalchemy.dialects.postgresql import insert
+import trafilatura
+from textblob import TextBlob
+import spacy
 
-# LOGGING SETUP
+# LOGGING
+os.makedirs("data", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("data/pipeline.log"),
+        logging.StreamHandler()
+    ]
 )
-log = logging.getLogger("mediapulse_ingest")
+log = logging.getLogger("mediapulse")
 
-log.info("Running MediaPulse Ingestion Pipeline...")
-
-# ROBUST DATA LOADING
-INPUT_FILE = "daily_news.csv"
-if not os.path.exists(INPUT_FILE):
-    log.error(f"No data file found at {INPUT_FILE}. Run scraper first.")
-    sys.exit(0)
-
-# low_memory=False fixes the DtypeWarning on mixed type columns
-df = pd.read_csv(INPUT_FILE, low_memory=False)
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    log.error("DATABASE_URL environment variable is missing! Ingestion halted.")
-    sys.exit(1)
-
-engine = create_engine(DATABASE_URL)
-
-# SMART DEDUPLICATION (In-Memory & Database Check)
-# Drop essential NaNs and internal file duplicates first
-initial_count = len(df)
-df = df.dropna(subset=['title', 'link'])
-df = df.drop_duplicates(subset=['title', 'link'])
-
-# Check existing records against (title, link) composite unique constraint
+# ─────────────────────────────────────────────
+# NER MODEL — loaded once at module level
+# ─────────────────────────────────────────────
 try:
-    with engine.connect() as conn:
-        existing = pd.read_sql("SELECT title, link FROM news", conn)
-    
-    if not existing.empty:
-        merged = df.merge(existing, on=['title', 'link'], how='left', indicator=True)
-        df = merged[merged['_merge'] == 'left_only'].drop(columns=['_merge'])
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    nlp = None
+    log.warning("[NER] spaCy model not found — run: python -m spacy download en_core_web_sm")
 
-    log.info(f"Found {len(df)} new articles (Filtered out {initial_count - len(df)} duplicate/invalid entries).")
-except Exception as e:
-    log.warning(f"Database deduplication check bypassed (Table might be empty or fresh): {e}")
+# CONFIGURATION
 
-if df.empty:
-    log.info("No new unique data to process. Exiting cleanly.")
-    sys.exit(0)
+# MONITORING TARGETS
 
-# DATA CLEANING
-df['summary'] = df['summary'].fillna("Summary unavailable")
+MONITORING_TARGETS = {
+    # ── ACTIVE CLIENTS
+    "Mastercard Foundation Africa Secondary Education": [
+        "Mastercard Foundation scholars",
+        "Mastercard Foundation CITL",
+        "Mastercard FFoundation centre for innovative teaching and learning",
+        "Mastercard Foundation Transitions",
+        "Mastercard Foundation Scholars Programme",
+        "Mastercard Foundation COVID",
+        "Mastercard Foundation Seconadry Education",
+    ],
 
-# FEATURE ENGINEERING
-# Parse dates with logical fallback priority: published_date -> collected_date -> UTC now
-pub_date = pd.to_datetime(df['published_date'], errors='coerce', utc=True)
-coll_date = pd.to_datetime(df.get('collected_date', pd.Series(dtype=object)), errors='coerce', utc=True)
-now_utc = pd.Timestamp.now(tz=datetime.timezone.utc)
+    "Safaricom": [
+        "Safaricom",
+        "M-Pesa",
+        "MPESA",
+        "Safaricom PLC",
+        "Safaricom 5G",
+    ],
 
-df['published_date'] = pub_date.fillna(coll_date).fillna(now_utc)
+    "Equity Group": [
+        "Equity Bank",
+        "Equity Group",
+        "Equity Group Holdings",
+        "James Mwangi",
+    ],
 
-# Derive temporal features once
-df['date'] = df['published_date'].dt.date
-df['hour'] = df['published_date'].dt.hour
-df['day_of_week'] = df['published_date'].dt.day_name()
+    "KCB Group": [
+        "KCB Bank",
+        "KCB Group",
+        "Kenya Commercial Bank",
+    ],
 
-# Safely extract metrics
-df['text_length'] = df['char_count'].fillna(0) if 'char_count' in df.columns else 0
-df['keyword_count'] = df['keywords'].fillna("").str.count(",") + 1 if 'keywords' in df.columns else 0
-df['sentiment_score'] = df['sentiment_score'].fillna(0.0) if 'sentiment_score' in df.columns else 0.0
+    # ── SECTOR MONITORING — for trend intelligence ─────────────
+    "Africa Fintech": [
+        "Africa fintech",
+        "Africa mobile money",
+        "Africa digital payments",
+        "Flutterwave",
+        "Paystack",
+        "OPay",
+        "Chipper Cash",
+        "Wave money",
+        "Moniepoint",
+    ],
 
-# Virality score calculation
-df['virality_score'] = (
-    df['text_length'] * 0.1 + 
-    df['keyword_count'] * 5 + 
-    df['sentiment_score'].abs() * 20
-)
+    "Africa Tech & AI": [
+        "Africa artificial intelligence",
+        "Africa AI",
+        "Africa machine learning",
+        "Africa tech startup",
+        "Africa deep tech",
+        "African developer",
+    ],
 
-# 5. UPLOAD TIMESTAMPS
-df['created_at'] = datetime.datetime.now(datetime.timezone.utc)
+    "Africa Health": [
+        "Africa health",
+        "Africa malaria",
+        "Africa HIV",
+        "Africa maternal health",
+        "Africa vaccination",
+        "Africa pandemic",
+        "KEMSA Kenya",
+        "Africa health system",
+    ],
 
-# 6. PUSH TO NEON POSTGRESQL (CRASH-PROOF UPSERT)
-columns_to_drop = [
-    'date', 'hour', 'day_of_week', 
-    'text_length', 'keyword_count', 
-    'monitoring_targets', 'char_count', 'virality_score',
-    'companies_detected',  # NER output — used by sync_entity_graph() below,
-                           # not stored on `news` (that table's schema doesn't have it)
-    'article_pk'           # surrogate PK — assigned by the DB sequence, never
-                           # supplied from the DataFrame side
+    "Africa Education": [
+        "Africa education",
+        "Africa university",
+        "Africa scholarship",
+        "Africa EdTech",
+        "Africa TVET",
+        "youth employment Africa",
+    ],
+
+    "Africa Climate": [
+        "Africa climate change",
+        "Africa flooding",
+        "Africa drought",
+        "Africa renewable energy",
+        "Africa solar",
+        "Africa green economy",
+        "Africa carbon",
+    ],
+
+    "Africa Development Finance": [
+        "African Development Bank",
+        "AfDB",
+        "World Bank Africa",
+        "IMF Africa",
+        "Africa development aid",
+        "Africa foreign direct investment",
+        "Africa FDI",
+    ],
+
+    # ── MEDIA & COMMUNICATIONS ──────────────────────────────────
+    "Kenya Media": [
+        "Nation Media Group",
+        "Standard Group Kenya",
+        "Royal Media Kenya",
+        "Kenya journalism",
+        "Kenya press freedom",
+        "Kenya media",
+    ],
+
+    "Africa PR & Communications": [
+        "Africa public relations",
+        "Africa communications",
+        "Africa reputation",
+        "Africa brand",
+        "Africa marketing",
+        "Africa crisis communications",
+    ],
+
+    # ── POLITICAL & GOVERNANCE ──────────────────────────────────
+    "Kenya Politics": [
+        "Kenya government",
+        "Kenya parliament",
+        "Kenya cabinet",
+        "William Ruto",
+        "Kenya Treasury",
+        "Kenya elections",
+    ],
+
+    "East Africa Economy": [
+        "East Africa economy",
+        "East African Community",
+        "EAC trade",
+        "Kenya economy",
+        "Uganda economy",
+        "Tanzania economy",
+        "Rwanda economy",
+    ],
+}
+
+# ─────────────────────────────────────────────────────────────
+# DERIVED — built from targets above
+# ─────────────────────────────────────────────────────────────
+ALL_SEARCH_TERMS = list({
+    term
+    for terms in MONITORING_TARGETS.values()
+    for term in terms
+})
+
+TERM_TO_LABEL = {
+    term: label
+    for label, terms in MONITORING_TARGETS.items()
+    for term in terms
+}
+
+GLOBAL_ENTITY = list(MONITORING_TARGETS.keys())[0]
+
+# ── OUTPUT & TIMING ───────────────────────────────────────────
+OUTPUT_FILE         = "daily_news.csv"
+REQUEST_TIMEOUT     = 15
+RATE_LIMIT_DELAY    = 0.3   # seconds between requests — be polite
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+COMPANIES = [
+    "safaricom", "kcb", "equity bank", "kenya airways", "nation media",
+    "standard group", "co-operative bank", "stanbic kenya", "icea lion",
+    "britam", "jubilee insurance", "mpesa", "mpesa foundation",
+    "dangote", "guaranty trust bank", "gtbank", "access bank", "zenith bank",
+    "first bank nigeria", "uba", "fidelity bank", "sterling bank",
+    "stanbic ibtc", "lafarge africa", "nestle nigeria",
+    "equity group", "ecobank", "absa", "standard bank", "nedbank",
+    "first national bank", "fnb", "old mutual", "sanlam",
+    "mtn", "airtel", "vodacom", "telkom", "orange africa", "glo mobile",
+    "flutterwave", "paystack", "andela", "interswitch", "opay",
+    "moniepoint", "wave mobile money", "chipper cash", "sendwave",
+    "mastercard foundation", "african wildlife foundation", "awf",
+    "science for africa", "sfa", "cema", "gates foundation africa",
+    "ford foundation africa", "rockefeller foundation", "usaid africa",
+    "giz africa", "dfid", "fcdo", "world bank africa", "afdb",
+    "african development bank",
+    "totalenergies", "shell", "bp africa", "sasol", "eskom",
+    "kenya power", "kengen", "tanesco",
+    "shoprite", "pick n pay", "woolworths south africa", "bidcorp",
+    "unilever africa", "diageo africa", "heineken africa",
+    "ethiopian airlines", "kenya airways", "rwandair", "air senegal",
+    "fastjet", "flysafair",
+    "google africa", "microsoft africa", "amazon africa",
+    "meta africa", "uber africa", "bolt africa",
 ]
 
-db_payload = df.drop(columns=columns_to_drop, errors='ignore')
+MONITOR_KEYWORDS = ALL_SEARCH_TERMS
 
-# PostgreSQL custom engine function to target unique key columns directly
-def postgres_on_conflict_do_nothing(table, conn, keys, data_iter):
-    data = [dict(zip(keys, row)) for row in data_iter]
-    if not data:
-        return
-    
-    stmt = insert(table.table).values(data)
-    
-    # Replaced named constraint reference with direct index target columns
-    stmt = stmt.on_conflict_do_nothing(
-        index_elements=['title', 'link']
-    )
-    
-    conn.execute(stmt)
-
-log.info(f"Syncing {len(db_payload)} records to the 'news' table in Neon...")
-db_payload.to_sql(
-    "news", 
-    engine, 
-    if_exists="append", 
-    index=False, 
-    method=postgres_on_conflict_do_nothing
-)
-log.info("New data successfully synced to Neon PostgreSQL.")
-
-# ═════════════════════════════════════════════════════════════
-# NEW — ENTITY KNOWLEDGE GRAPH (built on the same `engine`)
-# ═════════════════════════════════════════════════════════════
-# article_id references news(id) directly — no separate articles
-# table, since `news` already is that table.
-
-ENTITY_SCHEMA_SQL = """
-CREATE SCHEMA IF NOT EXISTS entities;
-
--- The existing `news.id` column is TEXT and holds article URLs, not
--- identifiers — it's effectively a duplicate of `link`. It can never
--- serve as a numeric primary key, and casting it to BIGINT will always
--- fail on the first URL. So: leave it alone entirely and add a real
--- surrogate key on a new column.
---
--- ADD COLUMN ... BIGSERIAL auto-backfills every existing row with a
--- sequence value, so no manual backfill step is needed.
--- Idempotent: IF NOT EXISTS on the column, and the PK is only added
--- when news has no PK/UNIQUE constraint yet.
-ALTER TABLE news ADD COLUMN IF NOT EXISTS article_pk BIGSERIAL;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint c
-        JOIN pg_class t ON c.conrelid = t.oid
-        WHERE t.relname = 'news' AND c.contype IN ('p', 'u')
-    ) THEN
-        ALTER TABLE news ADD PRIMARY KEY (article_pk);
-    END IF;
-END $$;
-
-CREATE TABLE IF NOT EXISTS entities.entities (
-    id SERIAL PRIMARY KEY,
-    canonical_name TEXT NOT NULL,
-    country TEXT,
-    sector TEXT,
-    confidence_score FLOAT DEFAULT 0.0,
-    source TEXT, -- 'ner_pipeline' | 'client_onboarding' | 'registry_enrichment'
-    verified BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS entities.entity_aliases (
-    id SERIAL PRIMARY KEY,
-    entity_id INT REFERENCES entities.entities(id),
-    alias_text TEXT NOT NULL,
-    UNIQUE(entity_id, alias_text)
-);
-
-CREATE TABLE IF NOT EXISTS entities.entity_mentions (
-    id SERIAL PRIMARY KEY,
-    entity_id INT REFERENCES entities.entities(id),
-    article_id BIGINT REFERENCES news(article_pk),
-    mention_date TIMESTAMP,
-    mention_count INT DEFAULT 1
-);
-
-CREATE INDEX IF NOT EXISTS idx_entity_aliases_text
-    ON entities.entity_aliases (alias_text);
-CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity_date
-    ON entities.entity_mentions (entity_id, mention_date);
-"""
-
-# Reuses the same watchlist you already have in the brand-tracking
-# section below — kept as one list so you're not maintaining two
-# copies of the same company names.
-ENTITY_WATCHLIST = [
-    "safaricom", "kcb", "equity bank", "mtn", "airtel",
-    "vodacom", "standard bank", "absa", "ecobank", "kenya airways",
-    "google", "microsoft", "amazon", "Centre for epidemiological modelling",
-    "CEMA", "SFA", "Africa wildlife foundation", "AWF", "MPESA Foundation",
-    "Mastercard Foundation", "Garnet partners", "African women in agricultural research and development",
-    "Kenyatta National Hospital", "Institute of engineering rwanda", "rwanda stock exchange",
-]
+# ─────────────────────────────────────────────
+# TEXT PROCESSING HELPERS
+# ─────────────────────────────────────────────
+def clean_text(text: str) -> str:
+    text = str(text)
+    text = re.sub(r'<[^>]+>', '', text)        # strip HTML
+    text = re.sub(r'http\S+', '', text)        # remove URLs
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
 
-def init_entity_schema(engine) -> None:
-    """Idempotent — safe to run on every ingestion pass. Creates the
-    schema/tables if missing, then seeds entities from the watchlist
-    as verified, source='client_onboarding'."""
-    with engine.begin() as conn:
-        conn.execute(text(ENTITY_SCHEMA_SQL))
-
-        for name in ENTITY_WATCHLIST:
-            existing = conn.execute(
-                text("SELECT entity_id FROM entities.entity_aliases WHERE alias_text = :name"),
-                {"name": name},
-            ).fetchone()
-            if existing:
-                continue
-
-            entity_id = conn.execute(
-                text("""
-                    INSERT INTO entities.entities (canonical_name, source, verified, confidence_score)
-                    VALUES (:name, 'client_onboarding', TRUE, 1.0)
-                    RETURNING id
-                """),
-                {"name": name},
-            ).scalar()
-
-            conn.execute(
-                text("""
-                    INSERT INTO entities.entity_aliases (entity_id, alias_text)
-                    VALUES (:entity_id, :name)
-                    ON CONFLICT (entity_id, alias_text) DO NOTHING
-                """),
-                {"entity_id": entity_id, "name": name},
-            )
-    log.info("[EntityGraph] Schema ready, watchlist seeded")
+def get_sentiment(text: str) -> tuple[float, str]:
+    try:
+        blob = TextBlob(text)
+        p = blob.sentiment.polarity
+        label = "Positive" if p > 0.05 else "Negative" if p < -0.05 else "Neutral"
+        return round(p, 4), label
+    except Exception:
+        return 0.0, "Neutral"
 
 
-def get_or_create_entity(conn, alias_text: str) -> int:
-    """Exact-match alias lookup, else creates a new low-confidence
-    entity with source='ner_pipeline'. Swap in rapidfuzz here if
-    exact matching starts producing near-duplicates in practice —
-    no need to guess the threshold before you see real data."""
-    row = conn.execute(
-        text("SELECT entity_id FROM entities.entity_aliases WHERE alias_text = :alias"),
-        {"alias": alias_text},
-    ).fetchone()
-    if row:
-        return row[0]
-
-    entity_id = conn.execute(
-        text("""
-            INSERT INTO entities.entities (canonical_name, source, verified, confidence_score)
-            VALUES (:alias, 'ner_pipeline', FALSE, 0.3)
-            RETURNING id
-        """),
-        {"alias": alias_text},
-    ).scalar()
-
-    conn.execute(
-        text("""
-            INSERT INTO entities.entity_aliases (entity_id, alias_text)
-            VALUES (:entity_id, :alias)
-            ON CONFLICT (entity_id, alias_text) DO NOTHING
-        """),
-        {"entity_id": entity_id, "alias": alias_text},
-    )
-    return entity_id
+def classify_article(text: str) -> str:
+    t = text.lower()
+    rules = [
+        (["artificial intelligence", " ai ", "machine learning", "deep learning",
+          "generative ai", "llm", "agentic"], "AI & Tech"),
+        (["health", "hospital", "disease", "malaria", "covid", "hiv",
+          "maternal", "vaccination", "clinic"], "Health"),
+        (["election", "government", "president", "parliament", "senate",
+          "minister", "cabinet", "policy", "legislation"], "Politics"),
+        (["business", "market", "finance", "economy", "gdp", "inflation",
+          "investment", "startup", "ipo", "funding"], "Business"),
+        (["climate", "flood", "drought", "weather", "carbon", "emissions",
+          "renewable", "solar", "green energy"], "Climate & Environment"),
+        (["education", "school", "university", "students", "learning",
+          "curriculum", "teacher", "scholarship"], "Education"),
+        (["agriculture", "farming", "crop", "harvest", "food security",
+          "smallholder", "irrigation"], "Agriculture"),
+        (["security", "conflict", "terrorism", "militia", "peacekeeping",
+          "coup", "protest", "strike"], "Security & Conflict"),
+    ]
+    for keywords, category in rules:
+        if any(kw in t for kw in keywords):
+            return category
+    return "General"
 
 
-def sync_entity_graph(engine, df: pd.DataFrame) -> None:
-    """Looks up the just-inserted rows' `news.id` by (link), matches
-    each article's text against ENTITY_WATCHLIST (verified, high
-    confidence), and separately reads the scraper's companies_detected
-    column — NER output — for anything outside the watchlist (unverified,
-    confidence 0.3). Writes one entity_mentions row per match, from
-    either source. No-ops cleanly if df is empty."""
-    if df.empty:
-        return
+def extract_keywords(text: str, n: int = 8) -> str:
+    stopwords = {
+        "about", "after", "again", "before", "between", "could",
+        "every", "first", "found", "great", "group", "here",
+        "large", "later", "light", "might", "never", "other",
+        "often", "place", "right", "should", "since", "small",
+        "still", "their", "there", "these", "thing", "think",
+        "those", "three", "under", "until", "where", "which",
+        "while", "world", "would", "years", "your"
+    }
+    words = re.findall(r'\b[a-z]{5,}\b', text.lower())
+    filtered = [w for w in words if w not in stopwords]
+    freq = {}
+    for w in filtered:
+        freq[w] = freq.get(w, 0) + 1
+    top = sorted(freq, key=freq.get, reverse=True)[:n]
+    return ", ".join(top)
 
-    init_entity_schema(engine)
 
-    with engine.connect() as conn:
-        stmt = text("SELECT article_pk, link FROM news WHERE link IN :links").bindparams(
-            bindparam("links", expanding=True)
+def extract_companies(text: str) -> str:
+    t = text.lower()
+    found = [c for c in COMPANIES if c.lower() in t]
+    return ", ".join(sorted(set(found)))
+
+
+def extract_companies_ner(text: str) -> str:
+    if not nlp or not text:
+        return ""
+    doc = nlp(text[:5000])
+    orgs = {ent.text.strip() for ent in doc.ents if ent.label_ == "ORG"}
+    return ", ".join(sorted(orgs))
+
+
+def extract_full_text(url: str) -> str:
+    try:
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            result = trafilatura.extract(downloaded, include_comments=False,
+                                          include_tables=False)
+            return clean_text(result or "")
+    except Exception:
+        pass
+    return ""
+
+
+def match_monitoring_targets(text: str) -> str:
+    t = text.lower()
+    matched = set()
+    for term, label in TERM_TO_LABEL.items():
+        if term.lower() in t:
+            matched.add(label)
+    return ", ".join(sorted(matched)) if matched else ""
+
+
+def build_article(source: str, title: str, summary: str,
+                  link: str, author: str, published: str,
+                  extra_text: str = "") -> dict:
+    full_text = clean_text(f"{title} {summary} {extra_text}")
+    sentiment_score, sentiment_label = get_sentiment(full_text)
+    return {
+        "source":               source,
+        "title":                clean_text(title),
+        "summary":              clean_text(summary)[:500],
+        "link":                 link,
+        "author":               author or "Unknown",
+        "published_date":       published,
+        "collected_date":       datetime.datetime.now().isoformat(),
+        "category":             classify_article(full_text),
+        "monitoring_targets":   match_monitoring_targets(full_text),
+        "sentiment_score":      sentiment_score,
+        "sentiment_label":      sentiment_label,
+        "companies_mentioned":  extract_companies(full_text),
+        "companies_detected":   extract_companies_ner(full_text),
+        "keywords":             extract_keywords(full_text),
+        "char_count":           len(full_text),
+    }
+
+
+# ─────────────────────────────────────────────
+# RSS FEEDS
+# ─────────────────────────────────────────────
+RSS_FEEDS = {
+    "Nation Africa":                "https://nation.africa/rss",
+    "Business Daily Africa":        "https://www.businessdailyafrica.com/rss",
+    "The Standard Kenya":           "https://www.standardmedia.co.ke/rss",
+    "Capital FM Kenya":             "https://www.capitalfm.co.ke/news/feed/",
+    "Kenyans.co.ke":                "https://www.kenyans.co.ke/rss.xml",
+    "Kenya Wallstreet":             "https://kenyawallstreet.com/feed/",
+    "The Star Kenya":               "https://www.the-star.co.ke/rss",
+    "TechCabal":                    "https://techcabal.com/feed/",
+    "TechPoint Africa":             "https://techpoint.africa/feed/",
+    "Disrupt Africa":               "https://disruptafrica.com/feed/",
+}
+
+
+def get_google_news_feeds() -> dict:
+    queries = [
+        GLOBAL_ENTITY,
+        "Africa fintech",
+        "Africa AI",
+        "Africa health",
+        "Safaricom",
+        "Kenya economy",
+    ]
+    feeds = {}
+    for q in queries:
+        encoded = q.replace(" ", "+").replace('"', "%22")
+        feeds[f"Google News: {q}"] = (
+            f"https://news.google.com/rss/search?"
+            f"q={encoded}&hl=en-US&gl=US&ceid=US:en"
         )
-        news_ids = pd.read_sql(stmt, conn, params={"links": df['link'].tolist()})
+    return feeds
 
-    id_map = dict(zip(news_ids['link'], news_ids['article_pk']))
 
-    search_text = (df['title'].fillna("") + " " + df['summary'].fillna("")).str.lower()
-    has_ner_column = 'companies_detected' in df.columns
-
-    mention_count = 0
-    with engine.begin() as conn:
-        for idx, row in df.iterrows():
-            article_id = id_map.get(row['link'])
-            if article_id is None:
-                continue  # row didn't make it into `news` (e.g. conflict skip)
-
-            text_blob = search_text.loc[idx]
-            watchlist_matches = {c for c in ENTITY_WATCHLIST if c.lower() in text_blob}
-
-            ner_matches = set()
-            if has_ner_column:
-                raw = row.get('companies_detected', "")
-                if isinstance(raw, str) and raw.strip():
-                    ner_matches = {c.strip() for c in raw.split(",") if c.strip()}
-
-            # union — a name that's both on the watchlist and NER-detected
-            # only needs one mention row, and get_or_create_entity() will
-            # resolve it to the existing verified watchlist entity anyway
-            all_matches = watchlist_matches | ner_matches
-            if not all_matches:
+def collect_rss(feeds: dict, client: httpx.Client) -> list[dict]:
+    articles = []
+    for source, url in feeds.items():
+        try:
+            time.sleep(RATE_LIMIT_DELAY)
+            res = client.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT,
+                             follow_redirects=True)
+            if res.status_code != 200:
+                log.warning(f"[RSS] {source}: HTTP {res.status_code}")
                 continue
+            feed = feedparser.parse(res.text)
+            count = 0
+            for entry in feed.entries:
+                title     = entry.get("title", "")
+                summary   = entry.get("summary", "")
+                link      = entry.get("link", "")
+                author    = entry.get("author", "Unknown")
+                published = entry.get("published", "")
+                content   = ""
+                if entry.get("content"):
+                    content = entry["content"][0].get("value", "")
 
-            for company in all_matches:
-                entity_id = get_or_create_entity(conn, company)
-                conn.execute(
-                    text("""
-                        INSERT INTO entities.entity_mentions (entity_id, article_id, mention_date)
-                        VALUES (:entity_id, :article_id, :mention_date)
-                    """),
-                    {
-                        "entity_id": entity_id,
-                        "article_id": int(article_id),
-                        "mention_date": row['published_date'],
-                    },
-                )
-                mention_count += 1
+                if not title and not link:
+                    continue
 
-    log.info(f"[EntityGraph] Recorded {mention_count} entity mentions across {len(id_map)} articles")
+                articles.append(build_article(
+                    source, title, summary, link, author, published, content
+                ))
+                count += 1
+            if count:
+                log.info(f"[RSS] {source}: {count} entries")
+        except Exception as e:
+            log.error(f"[RSS Error] {source}: {e}")
+    return articles
 
 
-sync_entity_graph(engine, df)
+def collect_gdelt(client: httpx.Client, query: str = None) -> list[dict]:
+    articles = []
+    query = query or GLOBAL_ENTITY
+    try:
+        res = client.get(
+            "https://api.gdeltproject.org/api/v2/doc/doc",
+            params={
+                "query": f'"{query}" sourcelang:english',
+                "mode": "artlist",
+                "maxrecords": "250",
+                "format": "json",
+            },
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if res.status_code == 200:
+            data = res.json().get("articles", [])
+            for art in data:
+                title     = art.get("title", "")
+                url       = art.get("url", "")
+                published = art.get("seendate", "")
+                src_name  = f"GDELT — {art.get('sourcecountry', 'Global')}"
+                articles.append(build_article(
+                    src_name, title, "", url,
+                    "GDELT", published
+                ))
+            log.info(f"[GDELT] {len(articles)} articles for query: {query}")
+    except Exception as e:
+        log.error(f"[GDELT Error]: {e}")
+    return articles
 
-# BRAND TRACKING & REPUTATION ENGINE
-companies = [
-    "safaricom", "kcb", "equity bank", "mtn", "airtel",
-    "vodacom", "standard bank", "absa", "ecobank", "kenya airways",
-    "google", "microsoft", "amazon", "Centre for epidemiological modelling", 
-    "CEMA", "SFA", "Africa wildlife foundation", "AWF", "MPESA Foundation",
-    "Mastercard Foundation", "Garnet partners", "African women in agricultural research and development",
-    "Kenyatta National Hospital", "Institute of engineering rwanda", "rwanda stock exchange",
-]
 
-df['temp_search_text'] = (df['title'].fillna("") + " " + df['summary'].fillna("")).str.lower()
+def collect_newsapi(client: httpx.Client, api_key: str) -> list[dict]:
+    articles = []
+    if not api_key:
+        log.info("[NewsAPI] No key found — skipping")
+        return articles
+    for keyword in MONITOR_KEYWORDS[:5]:
+        try:
+            res = client.get(
+                "https://newsapi.org/v2/everything",
+                params={
+                    "q": f'"{keyword}"',
+                    "language": "en",
+                    "sortBy": "publishedAt",
+                    "pageSize": 100,
+                    "apiKey": api_key,
+                },
+                headers=HEADERS,
+                timeout=REQUEST_TIMEOUT,
+            )
+            if res.status_code == 200:
+                for art in res.json().get("articles", []):
+                    title     = art.get("title", "")
+                    desc      = art.get("description", "") or ""
+                    link      = art.get("url", "")
+                    published = art.get("publishedAt", "")
+                    src_name  = f"NewsAPI — {art.get('source', {}).get('name', 'Unknown')}"
+                    author    = art.get("author", "Unknown")
+                    articles.append(build_article(
+                        src_name, title, desc, link, author, published
+                    ))
+                log.info(f"[NewsAPI] {keyword}: {len(articles)} total so far")
+            time.sleep(1)
+        except Exception as e:
+            log.error(f"[NewsAPI Error] {keyword}: {e}")
+    return articles
 
-brand_results = []
-for company in companies:
-    comp_clean = company.strip()
-    mask = df['temp_search_text'].str.contains(comp_clean.lower(), regex=False, na=False)
-    brand_df = df[mask]
-    
-    if not brand_df.empty:
-        brand_results.append({
-            "company": comp_clean,
-            "mentions": len(brand_df),
-            "avg_sentiment": brand_df['sentiment_score'].mean(),
-            "status": brand_df['sentiment_label'].iloc[0] if 'sentiment_label' in brand_df.columns else "Neutral"
-        })
 
-brand_df_final = pd.DataFrame(brand_results)
+def save_articles(new_articles: list[dict]) -> tuple[int, int]:
+    if not new_articles:
+        log.warning("No articles to save.")
+        return 0, 0
 
-# ANOMALY DETECTION & ALERT SYSTEM
-alerts = []
-latest_date = df['date'].max()
-prev_date = df[df['date'] < latest_date]['date'].max()
+    new_df = pd.DataFrame(new_articles)
+    new_df = new_df[new_df["title"].str.strip() != ""]
 
-if pd.notna(prev_date):
-    recent_volume = len(df[df['date'] == latest_date])
-    prev_volume = len(df[df['date'] == prev_date])
-    
-    if prev_volume > 0 and recent_volume > prev_volume * 1.5:
-        alerts.append(f"Volume Spike: {recent_volume} articles today vs {prev_volume} yesterday.")
+    if os.path.exists(OUTPUT_FILE):
+        existing_df = pd.read_csv(OUTPUT_FILE)
+        combined   = pd.concat([existing_df, new_df], ignore_index=True)
+        combined   = combined.drop_duplicates(subset="link", keep="last")
+        combined.to_csv(OUTPUT_FILE, index=False)
+        return len(new_df), len(combined)
+    else:
+        new_df.to_csv(OUTPUT_FILE, index=False)
+        return len(new_df), len(new_df)
 
-# SAVE LOCAL OUTPUTS & ARTIFACTS
-os.makedirs("data", exist_ok=True)
 
-clean_local_export = df.drop(columns=['temp_search_text'], errors='ignore')
-clean_local_export.to_csv("data/processed_news.csv", index=False)
-brand_df_final.to_csv("data/brand_mentions.csv", index=False)
+def collect_data():
+    start = time.time()
+    log.info("=" * 60)
+    log.info("MediaPulse Africa Pipeline v3.0 — Starting")
+    log.info("=" * 60)
 
-with open("data/alerts.txt", "w") as f:
-    for a in alerts: 
-        f.write(a + "\n")
+    all_articles = []
 
-log.info("=" * 60)
-log.info("Ingestion processing complete.")
-log.info(f"New Articles Added : {len(df)}")
-log.info(f"System Alerts Fired : {len(alerts)}")
-log.info("=" * 60)
+    with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+        # 1. RSS
+        log.info(f"[Step 1] RSS collection: {len(RSS_FEEDS)} feeds")
+        all_articles += collect_rss(RSS_FEEDS, client)
+
+        # 2. Google News RSS
+        google_feeds = get_google_news_feeds()
+        log.info(f"[Step 2] Google News RSS: {len(google_feeds)} keyword feeds")
+        all_articles += collect_rss(google_feeds, client)
+
+        # 3. GDELT
+        log.info("[Step 3] GDELT global intelligence layer")
+        for kw in MONITOR_KEYWORDS[:10]:  # Capped for standard execution speed
+            all_articles += collect_gdelt(client, kw)
+            time.sleep(1)
+
+        # 4. NewsAPI
+        log.info("[Step 4] NewsAPI aggregator")
+        all_articles += collect_newsapi(client, NEWS_API_KEY)
+
+    # Save
+    new_count, total_count = save_articles(all_articles)
+    elapsed = round(time.time() - start, 1)
+
+    with open("data/log.txt", "a") as f:
+        f.write(
+            f"{datetime.datetime.now().isoformat()} | "
+            f"new={new_count} | total={total_count} | "
+            f"elapsed={elapsed}s\n"
+        )
+
+    log.info("=" * 60)
+    log.info(f"Pipeline complete in {elapsed}s")
+    log.info(f"New articles collected : {new_count}")
+    log.info(f"Total dataset size     : {total_count}")
+    log.info(f"Output file            : {OUTPUT_FILE}")
+    log.info("=" * 60)
+
+
+if __name__ == "__main__":
+    try:
+        collect_data()
+    except Exception as e:
+        log.critical(f"Pipeline terminated due to an unexpected error: {e}", exc_info=True)
