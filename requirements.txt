@@ -1,9 +1,13 @@
-feedparser>=6.0.10
-textblob>=0.17.1
-httpx>=0.27.0
-pandas>=2.0.0
-trafilatura>=1.9.0
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.0
-schedule>=1.2.1
-spacy>=3.7.0
+httpx>=0.27
+feedparser>=6.0
+trafilatura>=1.12
+lxml>=5.0
+python-dateutil>=2.8
+textblob>=0.18
+py3langid>=0.3
+spacy>=3.7          # optional: enables ORG discovery (python -m spacy download en_core_web_sm)
+# optional, weaker organisation detection for Latin-script African languages:
+#   python -m spacy download xx_ent_wiki_sm
+# optional, sentiment / NER models for African languages (set MP_SENTIMENT_MODEL / MP_NER_MODEL):
+# transformers>=4.40
+# torch
