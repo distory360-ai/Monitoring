@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# SQLite side files (the pipeline closes the database cleanly; these should never be committed)
+*.db-wal
+*.db-shm
+
+# Logs and ad-hoc search exports
+data/pipeline.log
+data/log.txt
+data/search_*.csv
