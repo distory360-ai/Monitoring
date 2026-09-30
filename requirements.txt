@@ -5,9 +5,5 @@ lxml>=5.0
 python-dateutil>=2.8
 textblob>=0.18
 py3langid>=0.3
-spacy>=3.7          # optional: enables ORG discovery (python -m spacy download en_core_web_sm)
-# optional, weaker organisation detection for Latin-script African languages:
-#   python -m spacy download xx_ent_wiki_sm
-# optional, sentiment / NER models for African languages (set MP_SENTIMENT_MODEL / MP_NER_MODEL):
-# transformers>=4.40
-# torch
+spacy>=3.7         
+
