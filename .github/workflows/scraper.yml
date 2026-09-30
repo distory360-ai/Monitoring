@@ -1,11 +1,14 @@
+# OPTION A — the archive (data/mediapulse.db) is stored in the repo via Git LFS.
+# Simplest setup: no accounts or secrets beyond NEWS_API_KEY (optional).
+# Limit: every run commits a new copy of the database to LFS. Move to Option B
+# before data/mediapulse.db reaches ~100 MB, or the LFS quota runs out.
 name: MediaPulse crawl
 
 on:
   schedule:
     - cron: "17 3,15 * * *"     # 06:17 and 18:17 Nairobi time (UTC+3)
-  workflow_dispatch:            # "Run workflow" button for manual runs
+  workflow_dispatch:
 
-# Never let two runs write the database at the same time
 concurrency:
   group: mediapulse-crawl
   cancel-in-progress: false
@@ -15,25 +18,18 @@ permissions:
 
 jobs:
   crawl:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04        # pinned: ubuntu-latest moves to Ubuntu 26 from Oct 19, 2026
     timeout-minutes: 180
     env:
-      MP_USER_AGENT: "MediaPulseBot/5.0 (+https://mediapulse.africa/bot; bot@mediapulse.africa)"  # put your real URL/email
+      MP_USER_AGENT: "MediaPulseBot/5.0 (+https://mediapulse.africa/bot; bot@mediapulse.africa)"  # use your real URL/email
       NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
-      # Optional off-git storage for the archive (recommended once data/mediapulse.db passes ~100 MB).
-      # Add these four repository secrets to switch it on; leave them unset to keep the database in git (LFS).
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}              # https://<account-id>.r2.cloudflarestorage.com
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      AWS_DEFAULT_REGION: auto
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          lfs: ${{ secrets.R2_BUCKET == '' }}   # only pull LFS files when the database lives in git
+          lfs: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -43,32 +39,39 @@ jobs:
           pip install -r requirements.txt
           python -m spacy download en_core_web_sm
 
-      - name: Restore archive from R2
-        if: env.R2_BUCKET != ''
+      - name: Preflight — check the repo layout
         run: |
-          mkdir -p data
-          aws s3 cp "s3://$R2_BUCKET/mediapulse.db" data/mediapulse.db --endpoint-url "$R2_ENDPOINT" \
-            || echo "No archive in R2 yet — starting a new one"
+          ok=1
+          for f in scraper.py ingest.py requirements.txt; do
+            [ -f "$f" ] || { echo "::error::$f is missing from the repo root (did the files land inside a subfolder like option-A-git/ or option-B-r2/?)"; ok=0; }
+          done
+          [ $ok = 1 ] || exit 1
+          grep -q "PART 3 — PIPELINE" scraper.py || { echo "::error::scraper.py is still the old version — replace it with the new merged scraper.py"; exit 1; }
+          grep -q "import-legacy" ingest.py || { echo "::error::ingest.py is the old version (no --import-legacy) — replace it with the new ingest.py"; exit 1; }
+          python -c "import scraper, ingest" || { echo "::error::scraper.py / ingest.py failed to import — see the traceback above"; exit 1; }
+          echo "Layout OK"
+
+      - name: Import the v3 CSV into the archive (runs once, then skips itself)
+        run: |
+          if [ -f data/legacy_daily_news_v3.csv ]; then
+            python ingest.py --import-legacy data/legacy_daily_news_v3.csv
+          fi
 
       - name: Crawl
-        run: python pipeline.py
+        run: |
+          rm -f data/pipeline.log      # start a fresh log so the check below only sees this run
+          python scraper.py
 
       - name: Stop if the crawl failed
         run: |
-          grep -q "Pipeline complete" data/pipeline.log || { echo "Crawl did not finish"; tail -50 data/pipeline.log; exit 1; }
-
-      - name: Save archive to R2
-        if: env.R2_BUCKET != ''
-        run: |
-          aws s3 cp data/mediapulse.db "s3://$R2_BUCKET/mediapulse.db" --endpoint-url "$R2_ENDPOINT"
-          aws s3 cp data/mediapulse.db "s3://$R2_BUCKET/backups/mediapulse-$(date -u +%F).db" --endpoint-url "$R2_ENDPOINT"
+          if [ ! -f data/pipeline.log ]; then echo "::error::scraper.py wrote no log — it crashed at start-up (see the Crawl step)"; exit 1; fi
+          grep -q "Pipeline complete" data/pipeline.log || { echo "::error::Crawl did not finish"; tail -50 data/pipeline.log; exit 1; }
 
       - name: Commit results
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add daily_news.csv data/brand_mentions.csv
-          if [ -z "$R2_BUCKET" ]; then git add data/mediapulse.db; fi
+          git add daily_news.csv data/brand_mentions.csv data/mediapulse.db
           git diff --cached --quiet && { echo "Nothing new"; exit 0; }
           git commit -m "Update pipeline data"
           git pull --rebase
