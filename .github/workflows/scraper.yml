@@ -1,66 +1,75 @@
-name: Daily Data Pipeline
+name: MediaPulse crawl
 
 on:
   schedule:
-    - cron: "0 20 * * *"  # 11 PM Kenya time
-  workflow_dispatch:
+    - cron: "17 3,15 * * *"     # 06:17 and 18:17 Nairobi time (UTC+3)
+  workflow_dispatch:            # "Run workflow" button for manual runs
+
+# Never let two runs write the database at the same time
+concurrency:
+  group: mediapulse-crawl
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  pipeline:
+  crawl:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      MP_USER_AGENT: "MediaPulseBot/5.0 (+https://mediapulse.africa/bot; bot@mediapulse.africa)"  # put your real URL/email
+      NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+      # Optional off-git storage for the archive (recommended once data/mediapulse.db passes ~100 MB).
+      # Add these four repository secrets to switch it on; leave them unset to keep the database in git (LFS).
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}              # https://<account-id>.r2.cloudflarestorage.com
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
 
     steps:
-      # 1. Checkout repo with Git LFS support
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          lfs: true
+          lfs: ${{ secrets.R2_BUCKET == '' }}   # only pull LFS files when the database lives in git
 
-      # 2. Setup Python
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
+          cache: pip
 
-      # 3. Install dependencies
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install sqlalchemy psycopg2-binary
+          python -m spacy download en_core_web_sm
 
-      # 4. Download TextBlob corpora
-      - name: Download TextBlob corpora
-        run: python -m textblob.download_corpora
-
-      # 5. Run scraper (RAW DATA)
-      - name: Run scraper
-        run: python scraper.py
-
-      # 6. Run processing pipeline (sends to Neon DB)
-      - name: Run data processing
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python ingest.py
-
-      # 7. Track CSVs with LFS, commit, and push
-      - name: Commit and push changes
+      - name: Restore archive from R2
+        if: env.R2_BUCKET != ''
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p data
+          aws s3 cp "s3://$R2_BUCKET/mediapulse.db" data/mediapulse.db --endpoint-url "$R2_ENDPOINT" \
+            || echo "No archive in R2 yet — starting a new one"
 
-          # Ensure LFS tracks CSV files inside the runner environment
-          git lfs install
-          git lfs track "*.csv"
-          git add .gitattributes
+      - name: Crawl
+        run: python pipeline.py
 
-          # Stage files
-          git add daily_news.csv data/processed_news.csv data/log.txt
+      - name: Stop if the crawl failed
+        run: |
+          grep -q "Pipeline complete" data/pipeline.log || { echo "Crawl did not finish"; tail -50 data/pipeline.log; exit 1; }
 
-          # Commit and push only if changes exist
-          git diff --quiet && git diff --staged --quiet || (
-            git commit -m "Update pipeline data"
-            git push
-          )
+      - name: Save archive to R2
+        if: env.R2_BUCKET != ''
+        run: |
+          aws s3 cp data/mediapulse.db "s3://$R2_BUCKET/mediapulse.db" --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp data/mediapulse.db "s3://$R2_BUCKET/backups/mediapulse-$(date -u +%F).db" --endpoint-url "$R2_ENDPOINT"
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add daily_news.csv data/brand_mentions.csv
+          if [ -z "$R2_BUCKET" ]; then git add data/mediapulse.db; fi
+          git diff --cached --quiet && { echo "Nothing new"; exit 0; }
+          git commit -m "Update pipeline data"
+          git pull --rebase
+          git push
