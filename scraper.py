@@ -1,45 +1,3 @@
-"""
-MediaPulse Africa — scraper.py: the collector (crawler + full-text archive)
-
-    DISCOVER  ->  FETCH  ->  EXTRACT  ->  ANALYSE  ->  STORE  ->  EXPORT
-    sitemaps      robots-    trafilatura  brands,      SQLite     daily_news.csv
-    RSS/Atom      aware,     full text    topics,      (dedup,    brand_mentions.csv
-    homepage      polite,                 sentiment,   seen-URL
-    GDELT/GNews   async                   NER orgs     memory)
-    NewsAPI
-
-Design principle (the Meltwater lesson): index CONTENT, not brands.
-  * Every article is stored with its full text in a full-text index (SQLite FTS5),
-    so ANY brand can be searched later with ingest.py — listed or not.
-  * config.BRANDS + the watchlist (ingest.py --track) get per-mention rows.
-    Adding or changing a brand back-applies it to the whole archive automatically.
-  * Every ORG entity is stored, so ingest.py --discover can surface organisations
-    in the news that nobody is tracking yet.
-
-Run:
-    pip install -r requirements.txt
-    python -m spacy download en_core_web_sm      # optional, enables org discovery
-    python scraper.py
-
-Environment variables (all optional):
-    NEWS_API_KEY            NewsAPI key (skipped if empty)
-    MP_DB_PATH              default data/mediapulse.db
-    MP_CSV                  default daily_news.csv
-    MP_LOOKBACK_HOURS       default 48
-    MP_MAX_URLS_PER_SOURCE  default 150
-    MP_MAX_FETCH            default 4000 (hard cap on article fetches per run)
-    MP_CONCURRENCY          default 16
-    MP_DOMAIN_DELAY         default 2.0 seconds between hits to one host
-    MP_ENABLE_GDELT         default 1
-    MP_ENABLE_GNEWS         default 1
-    MP_USER_AGENT           set this to your real bot URL / contact email
-
-This one file holds three parts, in order:
-  1. CONFIGURATION  — brands, topics, outlets, languages. The part you edit.
-  2. LANGUAGES      — African-language detection, script normalisation, optional models.
-  3. PIPELINE       — discovery, fetching, extraction, analysis, storage, export.
-Querying, brand tracking, discovery and legacy imports live in ingest.py.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -77,19 +35,30 @@ MENTIONS_EXPORT = os.getenv("MP_MENTIONS_CSV", "data/brand_mentions.csv")
 EXPORT_DAYS = int(os.getenv("MP_EXPORT_DAYS", "30"))
 LOOKBACK_HOURS = int(os.getenv("MP_LOOKBACK_HOURS", "48"))
 MAX_URLS_PER_SOURCE = int(os.getenv("MP_MAX_URLS_PER_SOURCE", "150"))
-MAX_FETCH = int(os.getenv("MP_MAX_FETCH", "4000"))
+MAX_FETCH = int(os.getenv("MP_MAX_FETCH", "6000"))
+# Time budget for one run (minutes). The crawl stops starting new fetches when it runs out,
+# saves everything, and queues the unfetched URLs for the next run — so a run can never be
+# killed by the CI job limit before it saves. Discovery gets its own, smaller budget.
+TIME_BUDGET_MIN = float(os.getenv("MP_TIME_BUDGET_MIN", "100"))
+DISCOVERY_BUDGET_MIN = float(os.getenv("MP_DISCOVERY_BUDGET_MIN", "15"))
+SOURCE_DISCOVERY_TIMEOUT = float(os.getenv("MP_SOURCE_DISCOVERY_TIMEOUT", "150"))   # seconds per outlet
+MAX_PER_HOST = int(os.getenv("MP_MAX_PER_HOST", "80"))          # article fetches per site per run
+PENDING_MAX_AGE_DAYS = 3
 MAX_SITEMAPS = int(os.getenv("MP_MAX_SITEMAPS", "6"))
 CONCURRENCY = int(os.getenv("MP_CONCURRENCY", "16"))
 DOMAIN_DELAY = float(os.getenv("MP_DOMAIN_DELAY", "2.0"))
 REQUEST_TIMEOUT = float(os.getenv("MP_TIMEOUT", "20"))
 ENABLE_GDELT = os.getenv("MP_ENABLE_GDELT", "1") == "1"
-ENABLE_GNEWS = os.getenv("MP_ENABLE_GNEWS", "1") == "1"
+# news.google.com's robots.txt disallows /rss/search for crawlers, and this crawler obeys robots.txt,
+# so Google News returns nothing. Off by default to keep the log clean.
+ENABLE_GNEWS = os.getenv("MP_ENABLE_GNEWS", "0") == "1"
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")          # v3 crashed here: name was never defined
 
-GDELT_DELAY = 5.5          # GDELT asks for at most one request per ~5 seconds
-GDELT_BATCH = 6            # terms OR'd per GDELT query
+GDELT_DELAY = 10.0         # GDELT throttles shared CI IPs hard; ≥10 s between requests
+GDELT_BATCH = 12           # terms OR'd per GDELT query (fewer, larger queries = fewer 429s)
+GDELT_MAX_429 = 3          # consecutive rate-limit replies before GDELT is skipped for this run
 MIN_TEXT_CHARS = 250       # below this, extraction probably hit a non-article page
-FETCH_BATCH = 300          # candidates fetched per gather() round; committed after each
+COMMIT_EVERY = 50          # articles saved between database commits
 
 BOT_TOKEN = "MediaPulseBot"
 USER_AGENT = os.getenv(
@@ -111,7 +80,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("mediapulse")
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("trafilatura").setLevel(logging.WARNING)
+for _noisy in ("trafilatura", "htmldate", "courlan", "justext", "readability"):
+    logging.getLogger(_noisy).setLevel(logging.CRITICAL)      # "discarding data" etc. — counted in stats instead
 
 
 
@@ -143,7 +113,8 @@ logging.getLogger("trafilatura").setLevel(logging.WARNING)
 # backfills its mentions over everything already collected.
 
 # ─────────────────────────────────────────────────────────────
-# TOPIC / CLIENT MONITORING 
+# TOPIC / CLIENT MONITORING (topic trackers, unchanged intent,
+# typos fixed: "FFoundation", "Seconadry")
 # ─────────────────────────────────────────────────────────────
 MONITORING_TARGETS = {
     "Mastercard Foundation Africa Secondary Education": [
@@ -154,7 +125,7 @@ MONITORING_TARGETS = {
         "Centre for Innovative Teaching and Learning",
         "Mastercard Foundation Transitions",
         "Mastercard Foundation Secondary Education",
-        
+        "Mastercard Foundation",
     ],
     "Africa Fintech": [
         "Africa fintech", "African fintech", "mobile money", "digital payments",
@@ -616,6 +587,8 @@ GOOGLE_NEWS_EDITIONS = [
 
 # ─────────────────────────────────────────────────────────────
 # Topic-category words in African languages (added to pipeline.CATEGORY_RULES).
+# Drafted for coverage, not verified by native speakers — have each list reviewed.
+# Ge'ez / Arabic-script words are matched as substrings after normalisation.
 # ─────────────────────────────────────────────────────────────
 CATEGORY_WORDS_AFRICAN = {
     "AI & Tech": ["fasaha", "tiknoolajiyada", "tegnologie", "kunsmatige intelligensie", "tecnologia",
@@ -638,8 +611,25 @@ CATEGORY_WORDS_AFRICAN = {
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# LANGUAGES
+# PART 2 — LANGUAGES
 # ════════════════════════════════════════════════════════════════════════════
+# MediaPulse Africa — African-language support shared by pipeline.py and search.py.
+#
+# What this handles:
+#   * Language codes: the detector (py3langid) recognises Swahili, Hausa, Yoruba, Igbo,
+#     Nigerian Pidgin, Amharic, Somali, Oromo, Kinyarwanda, Luganda, Shona, Zulu, Xhosa,
+#     Afrikaans, Sesotho, Sepedi, Lingala, Gikuyu, Malagasy, Fulfulde, Kabyle, Arabic
+#     (incl. Egyptian/Moroccan), Portuguese and French. For languages it can't recognise
+#     (Tigrinya, Wolof, Twi, Ewe, Kirundi, Chichewa, Dholuo, ...) the source's declared
+#     language or the page's <html lang> is trusted instead.
+#   * Scripts: Ge'ez (Amharic, Tigrinya) and Arabic script attach prefixes to words
+#     (የ-/በ-/ለ- ; و-/ب-/ل-), so brand names inside them can't be matched on word
+#     boundaries, and both scripts have interchangeable spellings. Text and aliases in
+#     these scripts are normalised and matched as substrings.
+#   * Optional models for sentiment and organisation detection beyond English (see
+#     MP_SENTIMENT_MODEL / MP_NER_MODEL below). Without them, non-English articles are
+#     stored, indexed, searched and brand-matched, but sentiment is "Not scored".
+
 
 
 LANGUAGE_NAMES = {
@@ -728,6 +718,17 @@ def choose_language(detected: str, hint: str) -> str:
         return normalize_lang(detected)
     return hint or "und"
 
+
+# ─────────────────────────────────────────────
+# OPTIONAL MODELS (Hugging Face transformers)
+#   MP_SENTIMENT_MODEL  text-classification model id or local path, e.g. a model fine-tuned
+#                       on AfriSenti (Hausa, Yoruba, Igbo, Amharic, Swahili, Kinyarwanda, ...)
+#   MP_SENTIMENT_LABELS optional mapping when labels are opaque: "LABEL_0=Negative,LABEL_1=Neutral,LABEL_2=Positive"
+#   MP_SENTIMENT_ALL    "1" = use the model for English too (default: TextBlob for English)
+#   MP_NER_MODEL        token-classification model id or path, e.g. one trained on MasakhaNER
+#   spaCy xx_ent_wiki_sm (python -m spacy download xx_ent_wiki_sm) is used as a weaker
+#   fallback for organisation detection in Latin-script languages when no NER model is set.
+# ─────────────────────────────────────────────
 _sent_pipe = None
 _ner_pipe = None
 _xx_nlp = None
@@ -971,6 +972,8 @@ class Candidate:
 class FetchResult:
     resp: Optional[httpx.Response]
     reason: str               # ok | robots | gone | error | http_<code>
+    status: int = 0
+    body: str = ""
 
 
 def is_transient(reason: str) -> bool:
@@ -988,7 +991,14 @@ class Fetcher:
         self._last_hit: dict[str, float] = {}
         self._robots: dict[str, RobotFileParser] = {}
         self._robots_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self.robots_note: dict[str, str] = {}
         self.requests = 0
+
+    def host_delay(self, url: str) -> float:
+        """Seconds between requests to this URL's host: our default, or the site's Crawl-delay."""
+        rp = self._robots.get(urlparse(url).netloc.lower())
+        cd = rp.crawl_delay(BOT_TOKEN) if rp else None
+        return max(DOMAIN_DELAY, float(cd or 0))
 
     async def _raw_get(self, url: str, delay: float, headers: Optional[dict] = None) -> httpx.Response:
         host = urlparse(url).netloc.lower()
@@ -1012,17 +1022,20 @@ class Fetcher:
             rp = RobotFileParser()
             try:
                 r = await self._raw_get(f"{p.scheme}://{p.netloc}/robots.txt", DOMAIN_DELAY)
-                if r.status_code in (401, 403):
-                    rp.disallow_all = True
-                elif r.status_code >= 500:
+                if r.status_code >= 500 or r.status_code == 429:
                     rp.disallow_all = True          # RFC 9309: server error => assume full disallow
+                    self.robots_note[host] = f"robots.txt HTTP {r.status_code} (treated as disallow-all)"
                 elif r.status_code >= 400:
-                    rp.parse([])                    # no robots.txt => everything allowed
+                    rp.parse([])                    # RFC 9309: 4xx => no restrictions
+                    self.robots_note[host] = (f"robots.txt HTTP {r.status_code} — site may be blocking bots"
+                                              if r.status_code in (401, 403) else "no robots.txt")
                 else:
                     rp.parse(r.text.splitlines())
+                    self.robots_note[host] = "robots.txt ok"
             except Exception as e:                  # unreachable host: be conservative
                 log.debug(f"[robots] {host}: {e}")
                 rp.disallow_all = True
+                self.robots_note[host] = f"robots.txt unreachable ({type(e).__name__})"
             self._robots[host] = rp
             return rp
 
@@ -1042,10 +1055,10 @@ class Fetcher:
             log.debug(f"[fetch] {url}: {e}")
             return FetchResult(None, "error")
         if r.status_code == 429 or r.status_code >= 500:
-            return FetchResult(None, f"http_{r.status_code}")
+            return FetchResult(None, f"http_{r.status_code}", r.status_code, r.text[:300])
         if r.status_code >= 400:
-            return FetchResult(None, "gone")
-        return FetchResult(r, "ok")
+            return FetchResult(None, "gone", r.status_code, r.text[:300])
+        return FetchResult(r, "ok", r.status_code)
 
 
 # ─────────────────────────────────────────────
@@ -1121,6 +1134,22 @@ _EXCLUDE_PATH = re.compile(
 _ARTICLE_HINT = re.compile(r"(/20\d{2}/\d{1,2}/)|(\d{5,})|([a-z0-9]+(?:-[a-z0-9]+){3,})", re.I)
 
 
+def looks_like_article(path: str) -> bool:
+    """Section/listing pages (/news/, /regions, /composition/hp-news-4/) are not articles.
+    Articles have a long slug, a numeric id, a dated path, or an id-like last segment."""
+    segs = [x for x in path.split("/") if x]
+    if not segs:
+        return False
+    last = segs[-1]
+    if re.search(r"/20\d{2}/\d{1,2}/", path) or re.search(r"\d{5,}", last) or last.count("-") >= 3:
+        return True
+    if "%" in last and len(last) > 40:                       # percent-encoded Arabic/Ge'ez slugs
+        return True
+    if re.search(r"\.(s?html?|php|aspx?)$", last, re.I) and len(last) > 15:
+        return True
+    return len(last) >= 10 and "-" not in last and bool(re.search(r"\d", last)) and bool(re.search(r"[a-z]", last, re.I))
+
+
 def find_article_links(html: str, base: str) -> list[str]:
     if not html:
         return []
@@ -1139,13 +1168,14 @@ def find_article_links(html: str, base: str) -> list[str]:
 # ─────────────────────────────────────────────
 # DISCOVERY: OWN CRAWL OF EACH OUTLET
 # ─────────────────────────────────────────────
-async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime) -> list[Candidate]:
+async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Optional[dict] = None) -> list[Candidate]:
     base = src["url"].rstrip("/") + "/"
     bp = urlparse(base)
     root = f"{bp.scheme}://{bp.netloc}"
     prefix = bp.path.rstrip("/") if bp.path not in ("", "/") else ""
     src_host = host_key(bp.netloc)
     found: dict[str, Candidate] = {}
+    dropped = Counter()
 
     def add(url: str, published=None, via: str = "", title: str = "", summary: str = ""):
         cu = canonicalize(url)
@@ -1158,7 +1188,11 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime) -> list[Ca
             return
         if up.path in ("", "/") or _EXCLUDE_PATH.search(up.path):
             return
+        if via != "rss" and not looks_like_article(up.path):
+            dropped["not_article"] += 1
+            return
         if published and published < cutoff:
+            dropped["older_than_lookback"] += 1
             return
         if cu in found:
             c = found[cu]
@@ -1175,6 +1209,7 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime) -> list[Ca
     sitemaps = list(rp.site_maps() or []) or [root + "/sitemap.xml"]
     queue = deque(_prioritise_sitemaps([(s, None) for s in sitemaps]))
     visited: set[str] = set()
+    sm_notes = Counter()
     while queue and len(visited) < MAX_SITEMAPS:
         sm = queue.popleft()
         if sm in visited:
@@ -1182,7 +1217,9 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime) -> list[Ca
         visited.add(sm)
         res = await f.get(sm)
         if not res.resp:
+            sm_notes[res.reason if res.reason != "gone" else f"HTTP {res.status}"] += 1
             continue
+        sm_notes["ok"] += 1
         children, urls = parse_sitemap(res.resp.content)
         fresh_children = [(u, d) for u, d in children if d is None or d >= cutoff]
         queue.extend(_prioritise_sitemaps(fresh_children))
@@ -1194,6 +1231,7 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime) -> list[Ca
 
     # 2) RSS / Atom: configured + auto-discovered from homepage <link rel=alternate>
     home = await f.get(base)
+    feed_notes = Counter()
     html = ""
     if home.resp and "html" in home.resp.headers.get("content-type", "").lower():
         html = home.resp.text
@@ -1203,8 +1241,10 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime) -> list[Ca
     for feed_url in list(dict.fromkeys(feeds))[:4]:
         res = await f.get(feed_url)
         if not res.resp:
+            feed_notes[res.reason if res.reason != "gone" else f"HTTP {res.status}"] += 1
             continue
         parsed = feedparser.parse(res.resp.content)
+        feed_notes["ok" if parsed.entries else "empty"] += 1
         for e in parsed.entries:
             link = e.get("link")
             if link:
@@ -1219,7 +1259,16 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime) -> list[Ca
     cands = sorted(found.values(), key=lambda c: c.published or EPOCH, reverse=True)
     cands = cands[:MAX_URLS_PER_SOURCE]
     vias = Counter(c.via for c in cands)
-    log.info(f"[Discover] {src['name']}: {len(cands)} candidates {dict(vias)}")
+    if cands:
+        log.info(f"[Discover] {src['name']}: {len(cands)} candidates {dict(vias)}")
+    else:
+        home_note = "ok" if home.resp else (home.reason if home.reason != "gone" else f"HTTP {home.status}")
+        why = (f"{f.robots_note.get(bp.netloc.lower(), 'robots.txt ?')}; homepage: {home_note}; "
+               f"sitemaps: {dict(sm_notes) or 'none listed'}; feeds: {dict(feed_notes) or 'none found'}; "
+               f"filtered: {dict(dropped) or 'nothing'}")
+        log.info(f"[Discover] {src['name']}: 0 candidates — {why}")
+        if diag is not None:
+            diag[src["name"]] = why
     return cands
 
 
@@ -1245,26 +1294,54 @@ GDELT_COUNTRY = {  # GDELT reports country names; the rest of the pipeline uses 
 GDELT_MAX_HOURS = 90 * 24      # the GDELT DOC API only searches roughly the last 3 months
 
 
-async def discover_gdelt(f: Fetcher, terms: list[str], hours: int = LOOKBACK_HOURS) -> list[Candidate]:
+def _gdelt_term(t: str) -> Optional[str]:
+    """GDELT rejects punctuation and very short words inside phrases ("The specified phrase is too short")."""
+    t = re.sub(r"[^\w\s-]", " ", t, flags=re.UNICODE)
+    t = re.sub(r"\s+", " ", t).strip()
+    words = t.split()
+    if not words or len(t) < 5 or any(len(w) < 2 for w in words):
+        return None
+    return t
+
+
+async def discover_gdelt(f: Fetcher, terms: list[str], hours: int = LOOKBACK_HOURS,
+                         deadline: Optional[float] = None) -> list[Candidate]:
     out: list[Candidate] = []
-    terms = [t for t in dict.fromkeys(terms) if len(t) >= 4]
+    clean = [g for g in (_gdelt_term(t) for t in dict.fromkeys(terms)) if g]
     hours = max(1, min(hours, GDELT_MAX_HOURS))
-    for batch in chunked(terms, GDELT_BATCH):
-        q = " OR ".join(f'"{t}"' for t in batch)
+    rate_limited = 0
+    for batch in chunked(list(dict.fromkeys(clean)), GDELT_BATCH):
+        if deadline and time.monotonic() > deadline:
+            log.warning("[GDELT] discovery time budget reached — remaining queries skipped")
+            break
+        q = " OR ".join(f'"{t}"' if " " in t else t for t in batch)
         if len(batch) > 1:
             q = f"({q})"
         url = "https://api.gdeltproject.org/api/v2/doc/doc?" + urlencode({
             "query": q, "mode": "artlist", "maxrecords": "250", "format": "json",
             "sort": "datedesc", "timespan": f"{hours}h",
         })
-        res = await f.get(url, respect_robots=False, delay=GDELT_DELAY)
+        res = None
+        for attempt in range(2):
+            res = await f.get(url, respect_robots=False, delay=GDELT_DELAY)
+            if res.status != 429 and res.reason != "error":
+                break
+            await asyncio.sleep(20 * (attempt + 1))          # back off, then one retry
+        if res.status == 429:
+            rate_limited += 1
+            if rate_limited >= GDELT_MAX_429:
+                log.warning(f"[GDELT] rate-limited {rate_limited}× in a row — skipping GDELT for this run "
+                            "(GDELT throttles shared CI IP addresses)")
+                break
+            continue
+        rate_limited = 0
         if not res.resp:
             log.warning(f"[GDELT] {res.reason} for batch starting '{batch[0]}'")
             continue
         try:
             articles = res.resp.json().get("articles", [])
         except ValueError:
-            log.warning(f"[GDELT] non-JSON reply: {res.resp.text[:120]!r}")
+            log.warning(f"[GDELT] rejected query starting '{batch[0]}': {res.resp.text[:100].strip()!r}")
             continue
         for a in articles:
             cu = canonicalize(a.get("url", ""))
@@ -1346,8 +1423,13 @@ async def discover_newsapi(f: Fetcher, cutoff: dt.datetime) -> list[Candidate]:
         })
         res = await f.get(url, respect_robots=False, delay=1.0, headers={"X-Api-Key": NEWS_API_KEY})
         if not res.resp:
-            log.warning(f"[NewsAPI] {res.reason}")
-            continue
+            try:
+                err = json.loads(res.body)
+                msg = f"{err.get('code')}: {err.get('message')}"
+            except ValueError:
+                msg = res.body[:200] or res.reason
+            log.warning(f"[NewsAPI] HTTP {res.status} — {msg}. Skipping NewsAPI for this run.")
+            break
         for a in res.resp.json().get("articles", []):
             cu = canonicalize(a.get("url", ""))
             if cu:
@@ -1362,10 +1444,34 @@ async def discover_newsapi(f: Fetcher, cutoff: dt.datetime) -> list[Candidate]:
 # ─────────────────────────────────────────────
 # FETCH + EXTRACT
 # ─────────────────────────────────────────────
-def _extract(html: str, url: str) -> Optional[dict]:
+def _extract(html: str, url: str, recall: bool = False) -> Optional[dict]:
     out = trafilatura.extract(html, url=url, output_format="json", with_metadata=True,
-                              include_comments=False, include_tables=False, favor_precision=True)
+                              include_comments=False, include_tables=False,
+                              favor_precision=not recall, favor_recall=recall)
     return json.loads(out) if out else None
+
+
+def _extract_page(html: str, url: str) -> tuple[str, Optional[dict]]:
+    """Full text if possible; otherwise headline + description from the page's metadata, so a
+    paywalled or script-rendered article is still recorded (and brand-matched) instead of dropped."""
+    for recall in (False, True):
+        try:
+            meta = _extract(html, url, recall)
+        except Exception:
+            meta = None
+        body = (meta or {}).get("text") or (meta or {}).get("raw_text") or ""
+        if meta and len(body) >= min_article_chars(body, MIN_TEXT_CHARS):
+            return "ok", meta
+    try:
+        md = trafilatura.extract_metadata(html, default_url=url)
+        md = md.as_dict() if md else {}
+    except Exception:
+        md = {}
+    pagetype = (md.get("pagetype") or "").lower()
+    if md.get("title") and md.get("description") and pagetype in ("", "article", "newsarticle"):
+        return "meta_only", {"title": md.get("title"), "excerpt": md.get("description"), "text": "",
+                             "date": md.get("date"), "author": md.get("author")}
+    return "no_text", None
 
 
 async def fetch_candidate(f: Fetcher, c: Candidate):
@@ -1378,15 +1484,14 @@ async def fetch_candidate(f: Fetcher, c: Candidate):
         return "not_html", c, None, c.url
     final = canonicalize(str(res.resp.url)) or c.url
     try:
-        meta = await asyncio.to_thread(_extract, res.resp.text, final)
+        status, meta = await asyncio.to_thread(_extract_page, res.resp.text, final)
     except Exception as e:
         log.debug(f"[extract] {final}: {e}")
-        meta = None
-    body = (meta or {}).get("text") or (meta or {}).get("raw_text") or ""
-    if not meta or len(body) < min_article_chars(body, MIN_TEXT_CHARS):
-        return "no_text", c, None, final
+        status, meta = "no_text", None
+    if meta is None:
+        return status, c, None, final
     meta["_page_lang"] = page_lang(res.resp.text)
-    return "ok", c, meta, final
+    return status, c, meta, final
 
 
 # ─────────────────────────────────────────────
@@ -1565,7 +1670,7 @@ def ner_orgs(text: str, lang: str = "en") -> list[str]:
 
 def build_record(status: str, c: Candidate, meta: Optional[dict], final_url: str, cutoff: dt.datetime):
     """Returns (record, mentions, targets, orgs) or a skip reason string."""
-    if status == "ok":
+    if status in ("ok", "meta_only") and meta:
         title = clean_text(meta.get("title") or c.title_hint)
         text = clean_text(meta.get("text") or meta.get("raw_text") or "")
         summary = clean_text(meta.get("excerpt") or meta.get("description") or "")[:500] or text[:300]
@@ -1644,6 +1749,8 @@ CREATE TABLE IF NOT EXISTS watchlist(
 -- Which version of each brand's aliases has been back-applied to stored articles
 CREATE TABLE IF NOT EXISTS brand_backfill(name TEXT PRIMARY KEY, spec_hash TEXT, done_at TEXT);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+-- URLs discovered but not fetched before the time budget ran out; fetched first next run
+CREATE TABLE IF NOT EXISTS pending(url TEXT PRIMARY KEY, data TEXT, added_at TEXT);
 
 -- Full-text index over every stored article: this is what makes ANY brand searchable,
 -- including ones nobody listed when the article was collected.
@@ -1850,7 +1957,7 @@ def _write_csv(path: str, cursor):
 def make_client(transport: Optional[httpx.AsyncBaseTransport] = None) -> httpx.AsyncClient:
     kwargs = dict(
         headers={"User-Agent": USER_AGENT, "Accept-Language": "en,fr;q=0.8,sw;q=0.7,*;q=0.5"},
-        timeout=REQUEST_TIMEOUT,
+        timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=10.0),
         limits=httpx.Limits(max_connections=CONCURRENCY * 2, max_keepalive_connections=CONCURRENCY),
     )
     if transport is not None:
@@ -1858,39 +1965,122 @@ def make_client(transport: Optional[httpx.AsyncBaseTransport] = None) -> httpx.A
     return httpx.AsyncClient(**kwargs)
 
 
+def _cand_to_json(c: Candidate) -> str:
+    d = dict(c.__dict__)
+    d["published"] = iso(c.published) if c.published else None
+    return json.dumps(d)
+
+
+def _cand_from_json(s_: str) -> Candidate:
+    d = json.loads(s_)
+    d["published"] = parse_date(d.get("published"))
+    return Candidate(**d)
+
+
+def load_pending(conn: sqlite3.Connection) -> list[Candidate]:
+    since = iso(now_utc() - dt.timedelta(days=PENDING_MAX_AGE_DAYS))
+    rows = conn.execute("SELECT data FROM pending WHERE added_at >= ?", (since,)).fetchall()
+    conn.execute("DELETE FROM pending")
+    conn.commit()
+    out = []
+    for (d,) in rows:
+        try:
+            out.append(_cand_from_json(d))
+        except Exception:
+            pass
+    return out
+
+
+def save_pending(conn: sqlite3.Connection, cands: list[Candidate]):
+    now = iso(now_utc())
+    conn.executemany("INSERT OR REPLACE INTO pending VALUES (?,?,?)",
+                     [(c.url, _cand_to_json(c), now) for c in cands])
+    conn.commit()
+
+
 async def process_candidates(conn: sqlite3.Connection, f: Fetcher, cands: list[Candidate],
-                             cutoff: dt.datetime, stats: Counter) -> Counter:
-    """Dedupe -> skip already-seen -> fetch -> extract -> analyse -> store, committing per batch."""
+                             cutoff: dt.datetime, stats: Counter, deadline: Optional[float] = None) -> Counter:
+    """Dedupe -> skip already-seen -> fetch -> extract -> analyse -> store.
+    One worker per site fetches that site's URLs in order (so a slow site or a long Crawl-delay
+    never holds up the others); a single writer analyses and saves results as they arrive.
+    When the deadline passes, workers stop and unfetched URLs go to the pending queue."""
+    deadline = deadline or (time.monotonic() + 10 ** 9)
     unique: dict[str, Candidate] = {}
     for c in cands:
         if c.url and c.url not in unique:
             unique[c.url] = c
     seen = already_seen(conn, list(unique))
-    pending = round_robin_by_host([c for u, c in unique.items() if u not in seen])[:MAX_FETCH]
+    todo = [c for u, c in unique.items() if u not in seen]
     stats["candidates"] += len(unique)
     stats["already_seen"] += len(seen)
-    log.info(f"[Stage 1] {len(unique)} unique candidates, {len(seen)} already seen, {len(pending)} to fetch")
+
+    hints = [c for c in todo if not c.fetch]
+    by_host: dict[str, list] = defaultdict(list)
+    for c in todo:
+        if c.fetch:
+            by_host[urlparse(c.url).netloc.lower()].append(c)
+
+    # How many URLs each site can get this run: its cap, and what its Crawl-delay allows in the time left
+    leftover: list[Candidate] = []
+    queues: dict[str, list] = {}
+    total = 0
+    remaining = max(0.0, deadline - time.monotonic())
+    for host, lst in sorted(by_host.items(), key=lambda kv: -len(kv[1])):
+        lst.sort(key=lambda c: (c.via != "gdelt", -(c.published or EPOCH).timestamp()))
+        allow = min(MAX_PER_HOST, max(1, int(remaining * 0.9 / max(f.host_delay(lst[0].url), 0.5))))
+        queues[host], over = lst[:allow], lst[allow:]
+        leftover += over
+        total += len(queues[host])
+    if total > MAX_FETCH:                      # trim the biggest queues first
+        for host in sorted(queues, key=lambda h: -len(queues[h])):
+            while total > MAX_FETCH and len(queues[host]) > 1:
+                leftover.append(queues[host].pop())
+                total -= 1
+    log.info(f"[Stage 1] {len(unique)} unique candidates, {len(seen)} already seen, "
+             f"{total} to fetch across {len(queues)} sites, {len(hints)} headline-only, "
+             f"{len(leftover)} queued for later runs")
 
     log.info("[Stage 2] Fetch + analyse")
-    for batch in chunked(pending, FETCH_BATCH):
-        fetched = await asyncio.gather(*(fetch_candidate(f, c) for c in batch), return_exceptions=True)
-        for item in fetched:
-            if isinstance(item, Exception):
-                stats["fetch_exceptions"] += 1
-                continue
-            status, c, meta, final = item
-            stats[f"fetch_{status}"] += 1
+    out_q: asyncio.Queue = asyncio.Queue(maxsize=CONCURRENCY * 4)
+
+    async def worker(host: str, items: list):
+        for i, c in enumerate(items):
+            if time.monotonic() > deadline:
+                leftover.extend(items[i:])
+                return
             try:
-                built = build_record(status, c, meta, final, cutoff)
+                await out_q.put(await fetch_candidate(f, c))
             except Exception as e:
-                log.error(f"[Analyse] {c.url}: {e!r}")
-                stats["analyse_errors"] += 1
-                continue
-            if isinstance(built, str):                  # skipped
-                stats[f"skip_{built}"] += 1
-                if not is_transient(status):
-                    mark_seen(conn, c.url, f"{status}/{built}")
-                continue
+                log.debug(f"[fetch] {c.url}: {e!r}")
+                stats["fetch_exceptions"] += 1
+
+    async def feed_hints():
+        for c in hints:
+            await out_q.put(("hint", c, None, c.url))
+
+    async def producers():
+        await asyncio.gather(feed_hints(), *(worker(h, q) for h, q in queues.items()))
+        await out_q.put(None)
+
+    prod = asyncio.create_task(producers())
+    since_commit, last_log = 0, time.monotonic()
+    while True:
+        item = await out_q.get()
+        if item is None:
+            break
+        status, c, meta, final = item
+        stats[f"fetch_{status}"] += 1
+        try:
+            built = await asyncio.to_thread(build_record, status, c, meta, final, cutoff)
+        except Exception as e:
+            log.error(f"[Analyse] {c.url}: {e!r}")
+            stats["analyse_errors"] += 1
+            continue
+        if isinstance(built, str):
+            stats[f"skip_{built}"] += 1
+            if not is_transient(status):
+                mark_seen(conn, c.url, f"{status}/{built}")
+        else:
             record, mentions, targets, orgs = built
             if save_article(conn, record, mentions, targets, orgs):
                 stats["saved"] += 1
@@ -1899,72 +2089,119 @@ async def process_candidates(conn: sqlite3.Connection, f: Fetcher, cands: list[C
             mark_seen(conn, c.url, status)
             if final != c.url:
                 mark_seen(conn, final, status)
-        conn.commit()
-        log.info(f"[Stage 2] batch done — saved so far: {stats['saved']}")
+        since_commit += 1
+        if since_commit >= COMMIT_EVERY:
+            conn.commit()
+            since_commit = 0
+        if time.monotonic() - last_log > 60:
+            mins_left = max(0, (deadline - time.monotonic()) / 60)
+            log.info(f"[Stage 2] saved {stats['saved']} so far, {mins_left:.0f} min of budget left")
+            last_log = time.monotonic()
+    await prod
+    conn.commit()
+    if leftover:
+        save_pending(conn, leftover)
+        log.info(f"[Stage 2] {len(leftover)} URLs queued for the next run")
+    stats["queued_for_next_run"] += len(leftover)
     return stats
+
+
+async def _discover_all(f: Fetcher, sources: list, cutoff: dt.datetime, registry: dict,
+                        use_indexes: bool, stats: Counter, diag: dict) -> list[Candidate]:
+    """All outlets and the global indexes in parallel, each outlet with its own timeout and the
+    whole stage with a budget; whatever has finished when the budget ends is used."""
+    disc_deadline = time.monotonic() + DISCOVERY_BUDGET_MIN * 60
+
+    async def one(src):
+        try:
+            return await asyncio.wait_for(discover_source(f, src, cutoff, diag), SOURCE_DISCOVERY_TIMEOUT)
+        except asyncio.TimeoutError:
+            diag[src["name"]] = f"discovery timed out after {SOURCE_DISCOVERY_TIMEOUT:.0f}s (slow site)"
+            log.info(f"[Discover] {src['name']}: timed out")
+            return []
+
+    tasks = {asyncio.create_task(one(s_)): s_["name"] for s_ in sources}
+    if use_indexes:
+        if ENABLE_GDELT:
+            terms = list(registry) + [t for ts in MONITORING_TARGETS.values() for t in ts]
+            tasks[asyncio.create_task(discover_gdelt(f, terms, deadline=disc_deadline))] = "GDELT"
+        if ENABLE_GNEWS:
+            tasks[asyncio.create_task(discover_google_news(f, registry))] = "Google News"
+        if NEWS_API_KEY:
+            tasks[asyncio.create_task(discover_newsapi(f, cutoff))] = "NewsAPI"
+    done, not_done = await asyncio.wait(tasks, timeout=max(1.0, disc_deadline - time.monotonic()))
+    for t in not_done:
+        t.cancel()
+        diag.setdefault(tasks[t], "not finished within the discovery budget")
+    if not_done:
+        log.warning(f"[Stage 1] discovery budget reached; unfinished: {', '.join(tasks[t] for t in not_done)}")
+    cands: list[Candidate] = []
+    for t in done:
+        if t.exception():
+            log.error(f"[Discover] {tasks[t]} failed: {t.exception()!r}")
+            stats["source_errors"] += 1
+        else:
+            cands.extend(t.result())
+    return cands
 
 
 async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBaseTransport] = None,
               use_indexes: bool = True, db_path: str = DB_PATH) -> Counter:
-    sources = [s for s in (SOURCES if sources is None else sources) if s.get("crawl", True)]
+    sources = [s_ for s_ in (SOURCES if sources is None else sources) if s_.get("crawl", True)]
     started = now_utc()
     cutoff = started - dt.timedelta(hours=LOOKBACK_HOURS)
     t0 = time.monotonic()
+    deadline = t0 + TIME_BUDGET_MIN * 60
     conn = db_connect(db_path)
     stats: Counter = Counter()
+    diag: dict = {}
+    finished = False
 
-    registry = active_registry(conn)
-    use_registry(registry)
-    sync_backfills(conn, registry)
+    try:
+        registry = active_registry(conn)
+        use_registry(registry)
+        sync_backfills(conn, registry)
 
-    log.info("=" * 60)
-    log.info(f"MediaPulse Africa Pipeline v5 — {len(sources)} outlets, {len(registry)} tracked brands, "
-             f"lookback {LOOKBACK_HOURS}h")
-    log.info("=" * 60)
+        log.info("=" * 60)
+        log.info(f"MediaPulse Africa Pipeline v5 — {len(sources)} outlets, {len(registry)} tracked brands, "
+                 f"lookback {LOOKBACK_HOURS}h, time budget {TIME_BUDGET_MIN:.0f} min")
+        log.info("=" * 60)
 
-    async with make_client(transport) as client:
-        f = Fetcher(client)
+        pending = load_pending(conn)
+        if pending:
+            log.info(f"[Stage 0] {len(pending)} URLs carried over from the previous run")
 
-        log.info("[Stage 1] Discovery")
-        results = await asyncio.gather(*(discover_source(f, s, cutoff) for s in sources),
-                                       return_exceptions=True)
-        cands: list[Candidate] = []
-        for src, res in zip(sources, results):
-            if isinstance(res, Exception):
-                log.error(f"[Discover] {src['name']} failed: {res!r}")
-                stats["source_errors"] += 1
-            else:
-                cands.extend(res)
-
-        if use_indexes:
-            index_jobs = []
-            if ENABLE_GDELT:
-                terms = list(registry) + [t for ts in MONITORING_TARGETS.values() for t in ts]
-                index_jobs.append(discover_gdelt(f, terms))
-            if ENABLE_GNEWS:
-                index_jobs.append(discover_google_news(f, registry))
-            if NEWS_API_KEY:
-                index_jobs.append(discover_newsapi(f, cutoff))
-            for res in await asyncio.gather(*index_jobs, return_exceptions=True):
-                if isinstance(res, Exception):
-                    log.error(f"[Index] failed: {res!r}")
-                else:
-                    cands.extend(res)
-
-        await process_candidates(conn, f, cands, cutoff, stats)
-        stats["http_requests"] = f.requests
-
-    export_csvs(conn)
-    elapsed = round(time.monotonic() - t0, 1)
-    stats["elapsed_s"] = elapsed
-    conn.execute("INSERT INTO runs(started_at, finished_at, stats) VALUES(?,?,?)",
-                 (iso(started), iso(now_utc()), json.dumps(dict(stats))))
-    conn.commit()
-    conn.close()
+        async with make_client(transport) as client:
+            f = Fetcher(client)
+            log.info("[Stage 1] Discovery")
+            cands = pending + await _discover_all(f, sources, cutoff, registry, use_indexes, stats, diag)
+            await process_candidates(conn, f, cands, cutoff, stats, deadline=deadline)
+            stats["http_requests"] = f.requests
+        finished = True
+    finally:
+        export_csvs(conn)
+        elapsed = round(time.monotonic() - t0, 1)
+        stats["elapsed_s"] = elapsed
+        conn.execute("INSERT INTO runs(started_at, finished_at, stats) VALUES(?,?,?)",
+                     (iso(started), iso(now_utc()), json.dumps(dict(stats))))
+        conn.commit()
+        per_source = conn.execute(
+            "SELECT source, COUNT(*) FROM articles WHERE collected_at >= ? GROUP BY source ORDER BY 2 DESC",
+            (iso(started),)).fetchall()
+        conn.close()
 
     log.info("=" * 60)
+    if diag:
+        log.info(f"Outlets with nothing collected this run ({len(diag)}) — fix or remove these in SOURCES:")
+        for name, why in sorted(diag.items()):
+            log.info(f"  - {name}: {why}")
+    if per_source:
+        log.info("Saved this run by outlet: " + ", ".join(f"{s_} {n}" for s_, n in per_source[:25])
+                 + (" …" if len(per_source) > 25 else ""))
+    budget_note = (f" (time budget reached; {stats['queued_for_next_run']} URLs queued for the next run)"
+                   if stats.get("queued_for_next_run") else "")
     log.info(f"Pipeline complete in {elapsed}s — saved {stats['saved']} articles, "
-             f"{stats['brand_mentions']} brand mentions")
+             f"{stats['brand_mentions']} brand mentions{budget_note}")
     log.info(f"Stats: {dict(stats)}")
     log.info(f"Outputs: {db_path}, {CSV_EXPORT}, {MENTIONS_EXPORT}")
     log.info("=" * 60)
@@ -1983,7 +2220,7 @@ async def collect_terms(terms: list[str], days: int, transport: Optional[httpx.A
         f = Fetcher(client)
         cands = []
         if ENABLE_GDELT:
-            cands += await discover_gdelt(f, terms, hours=days * 24)
+            cands += await discover_gdelt(f, terms, hours=days * 24, deadline=time.monotonic() + 600)
         if ENABLE_GNEWS:
             cands += await discover_google_news(f, {t: {} for t in terms}, days=days, all_editions=True)
         await process_candidates(conn, f, cands, cutoff, stats)
@@ -1997,3 +2234,4 @@ if __name__ == "__main__":
         asyncio.run(run())
     except Exception as e:
         log.critical(f"Pipeline terminated: {e}", exc_info=True)
+        raise SystemExit(1)
