@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -45,6 +44,8 @@ DISCOVERY_BUDGET_MIN = float(os.getenv("MP_DISCOVERY_BUDGET_MIN", "15"))
 SOURCE_DISCOVERY_TIMEOUT = float(os.getenv("MP_SOURCE_DISCOVERY_TIMEOUT", "240"))   # seconds per outlet
 MAX_PER_HOST = int(os.getenv("MP_MAX_PER_HOST", "60"))          # article fetches per site per run
 PENDING_MAX_AGE_DAYS = 3
+SKIP_AFTER_FAILURES = 3        # an outlet that blocks us this many runs in a row ...
+SKIP_DAYS = 7                  # ... is skipped for this many days, then retried
 MAX_SITEMAPS = int(os.getenv("MP_MAX_SITEMAPS", "6"))
 CONCURRENCY = int(os.getenv("MP_CONCURRENCY", "24"))
 DOMAIN_DELAY = float(os.getenv("MP_DOMAIN_DELAY", "2.0"))
@@ -382,6 +383,9 @@ BRANDS = {
 #   feeds  : optional; add one when auto-discovery misses it.
 #   path   : a URL with a path (e.g. bbc.com/swahili) restricts the
 #            crawl to that section.
+#   hosts  : optional extra hostnames the outlet publishes on (e.g. BBC feeds link to bbc.co.uk).
+#   delay  : optional seconds between requests for sites that rate-limit (HTTP 429).
+#   discovery_timeout : optional seconds for very slow sites (default 240).
 #   tier   : how much weight a mention here deserves in reports.
 #            national     — major national newspaper / broadcaster / agency
 #            trade        — business, sector or specialist title
@@ -420,14 +424,13 @@ SOURCES = [
     {"name": "Daily Monitor", "url": "https://www.monitor.co.ug", "country": "UG", "lang": "en", "tier": "national"},
     {"name": "New Vision", "url": "https://www.newvision.co.ug", "country": "UG", "lang": "en", "tier": "national"},
     {"name": "Nile Post", "url": "https://nilepost.co.ug", "country": "UG", "lang": "en", "tier": "national"},
-    {"name": "NTV Uganda", "url": "https://ntv.co.ug", "country": "UG", "lang": "en", "tier": "national"},
+    {"name": "NTV Uganda", "url": "https://ntv.co.ug", "country": "UG", "lang": "en", "tier": "national", "discovery_timeout": 480},
     {"name": "The Independent Uganda", "url": "https://www.independent.co.ug", "country": "UG", "lang": "en",
      "tier": "national"},
     {"name": "PML Daily", "url": "https://pmldaily.com", "country": "UG", "lang": "en", "tier": "digital"},
     {"name": "Pulse Uganda", "url": "https://www.pulse.ug", "country": "UG", "lang": "en", "tier": "digital"},
     {"name": "SoftPower News", "url": "https://softpower.ug", "country": "UG", "lang": "en", "tier": "digital"},
     {"name": "Business Focus", "url": "https://businessfocus.co.ug", "country": "UG", "lang": "en", "tier": "trade"},
-    {"name": "The Standard Uganda", "url": "https://thestandard.co.ug", "country": "UG", "lang": "en", "tier": "digital"},
     {"name": "UG Standard", "url": "https://www.ugstandard.com", "country": "UG", "lang": "en", "tier": "digital"},
     {"name": "Ugnews Line", "url": "https://www.ugnewsline.com", "country": "UG", "lang": "en", "tier": "digital"},
     {"name": "Let Out News", "url": "https://letoutnews.com", "country": "UG", "lang": "en", "tier": "digital"},
@@ -489,7 +492,7 @@ SOURCES = [
 
     # ── North Africa ─────────────────────────────────────────
     {"name": "Morocco World News", "url": "https://www.moroccoworldnews.com", "country": "MA", "lang": "en",
-     "tier": "national"},
+     "tier": "national", "discovery_timeout": 480},
     {"name": "Hespress English", "url": "https://en.hespress.com", "country": "MA", "lang": "en", "tier": "national"},
     {"name": "Egypt Independent", "url": "https://www.egyptindependent.com", "country": "EG", "lang": "en",
      "tier": "national"},
@@ -618,7 +621,8 @@ SOURCES = [
     {"name": "Sahara Reporters", "url": "https://saharareporters.com", "country": "NG", "lang": "en", "tier": "digital"},
     {"name": "Ripples Nigeria", "url": "https://www.ripplesnigeria.com", "country": "NG", "lang": "en", "tier": "digital"},
     {"name": "Peoples Gazette", "url": "https://gazettengr.com", "country": "NG", "lang": "en", "tier": "digital"},
-    {"name": "HumAngle", "url": "https://humanglemedia.com", "country": "NG", "lang": "en", "tier": "trade"},
+    {"name": "HumAngle", "url": "https://humanglemedia.com", "country": "NG", "lang": "en", "tier": "trade",
+     "delay": 10},
     {"name": "Legit.ng", "url": "https://www.legit.ng", "country": "NG", "lang": "en", "tier": "digital"},
     {"name": "Pulse Nigeria", "url": "https://www.pulse.ng", "country": "NG", "lang": "en", "tier": "digital"},
     {"name": "Arise News", "url": "https://www.arise.tv", "country": "NG", "lang": "en", "tier": "national"},
@@ -676,7 +680,8 @@ SOURCES = [
     {"name": "7sur7.cd", "url": "https://7sur7.cd", "country": "CD", "lang": "fr", "tier": "digital"},
     {"name": "Zoom Eco", "url": "https://zoom-eco.net", "country": "CD", "lang": "fr", "tier": "trade"},
     # ── Indian Ocean ─────────────────────────────────────────
-    {"name": "L'Express de Madagascar", "url": "https://lexpress.mg", "country": "MG", "lang": "fr", "tier": "national"},
+    {"name": "L'Express de Madagascar", "url": "https://lexpress.mg", "country": "MG", "lang": "fr", "tier": "national",
+     "delay": 10},      # rate-limits fast clients (HTTP 429)
     {"name": "Midi Madagasikara", "url": "https://midi-madagasikara.mg", "country": "MG", "lang": "fr",
      "tier": "national"},
     {"name": "L'Express Maurice", "url": "https://lexpress.mu", "country": "MU", "lang": "fr", "tier": "national"},
@@ -699,7 +704,8 @@ SOURCES = [
     {"name": "Zambia Daily Mail", "url": "https://www.daily-mail.co.zm", "country": "ZM", "lang": "en", "tier": "national"},
     {"name": "News Diggers", "url": "https://diggers.news", "country": "ZM", "lang": "en", "tier": "national"},
     {"name": "Zambia Monitor", "url": "https://www.zambiamonitor.com", "country": "ZM", "lang": "en", "tier": "trade"},
-    {"name": "Mwebantu", "url": "https://www.mwebantu.com", "country": "ZM", "lang": "en", "tier": "digital"},
+    {"name": "Mwebantu", "url": "https://www.mwebantu.com", "country": "ZM", "lang": "en", "tier": "digital",
+     "crawl": False},  # robots.txt disallows crawlers; still tagged when GDELT finds it
     {"name": "The Herald (Zimbabwe)", "url": "https://www.herald.co.zw", "country": "ZW", "lang": "en", "tier": "national"},
     {"name": "The Chronicle (Zimbabwe)", "url": "https://www.chronicle.co.zw", "country": "ZW", "lang": "en",
      "tier": "national"},
@@ -710,7 +716,8 @@ SOURCES = [
     {"name": "Nyasa Times", "url": "https://www.nyasatimes.com", "country": "MW", "lang": "en", "tier": "digital"},
     {"name": "Malawi24", "url": "https://malawi24.com", "country": "MW", "lang": "en", "tier": "digital"},
     {"name": "The Nation (Malawi)", "url": "https://mwnation.com", "country": "MW", "lang": "en", "tier": "national"},
-    {"name": "Times 360 Malawi", "url": "https://times.mw", "country": "MW", "lang": "en", "tier": "national"},
+    {"name": "Times 360 Malawi", "url": "https://times.mw", "country": "MW", "lang": "en", "tier": "national",
+     "crawl": False},  # robots.txt disallows crawlers
     {"name": "Club of Mozambique", "url": "https://clubofmozambique.com", "country": "MZ", "lang": "en", "tier": "trade"},
     {"name": "ANGOP", "url": "https://www.angop.ao", "country": "AO", "lang": "pt", "tier": "national"},
     {"name": "Expansão", "url": "https://expansao.co.ao", "country": "AO", "lang": "pt", "tier": "trade"},
@@ -759,7 +766,8 @@ SOURCES = [
     {"name": "VOA Africa", "url": "https://www.voaafrica.com", "country": "PAN", "lang": "en", "tier": "international"},
     {"name": "VOA Afrique", "url": "https://www.voaafrique.com", "country": "PAN", "lang": "fr", "tier": "international"},
     {"name": "BBC News Africa", "url": "https://www.bbc.com/news/world/africa", "country": "PAN", "lang": "en",
-     "tier": "international", "feeds": ["https://feeds.bbci.co.uk/news/world/africa/rss.xml"]},
+     "tier": "international", "feeds": ["https://feeds.bbci.co.uk/news/world/africa/rss.xml"],
+     "hosts": ["bbc.co.uk"]},
     {"name": "The Conversation Africa", "url": "https://theconversation.com/africa", "country": "PAN", "lang": "en",
      "tier": "trade", "feeds": ["https://theconversation.com/africa/articles.atom"]},
     {"name": "Le Monde Afrique", "url": "https://www.lemonde.fr/afrique", "country": "PAN", "lang": "fr",
@@ -1103,6 +1111,17 @@ def host_key(netloc: str) -> str:
     return netloc[4:] if netloc.startswith("www.") else netloc
 
 
+_SLD = {"co", "com", "org", "net", "gov", "ac", "or", "go", "ne", "edu", "info", "sch", "mil", "nom", "gouv"}
+
+
+def reg_domain(netloc: str) -> str:
+    """news.example.co.ke / amp.example.co.ke / example.co.ke -> example.co.ke"""
+    parts = host_key(netloc).split(".")
+    if len(parts) >= 3 and parts[-2] in _SLD and len(parts[-1]) == 2:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
 def sha1(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()
 
@@ -1202,13 +1221,14 @@ class Fetcher:
         self._robots: dict[str, RobotFileParser] = {}
         self._robots_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.robots_note: dict[str, str] = {}
+        self.host_overrides: dict[str, float] = {}     # per-source "delay" from SOURCES
         self.requests = 0
 
     def host_delay(self, url: str) -> float:
         """Seconds between requests to this URL's host: our default, or the site's Crawl-delay."""
         rp = self._robots.get(urlparse(url).netloc.lower())
         cd = rp.crawl_delay(BOT_TOKEN) if rp else None
-        return max(DOMAIN_DELAY, float(cd or 0))
+        return max(DOMAIN_DELAY, float(cd or 0), self.host_overrides.get(host_key(urlparse(url).netloc), 0))
 
     async def _raw_get(self, url: str, delay: float, headers: Optional[dict] = None) -> httpx.Response:
         host = urlparse(url).netloc.lower()
@@ -1231,7 +1251,19 @@ class Fetcher:
                 return self._robots[host]
             rp = RobotFileParser()
             try:
-                r = await self._raw_get(f"{p.scheme}://{p.netloc}/robots.txt", DOMAIN_DELAY)
+                r = None
+                for attempt in range(2):            # one retry for flaky connections and rate limits
+                    try:
+                        r = await self._raw_get(f"{p.scheme}://{p.netloc}/robots.txt", DOMAIN_DELAY)
+                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout):
+                        if attempt:
+                            raise
+                        await asyncio.sleep(5)
+                        continue
+                    if r.status_code == 429 and not attempt:
+                        await asyncio.sleep(15)
+                        continue
+                    break
                 if r.status_code >= 500 or r.status_code == 429:
                     rp.disallow_all = True          # RFC 9309: server error => assume full disallow
                     self.robots_note[host] = f"robots.txt HTTP {r.status_code} (treated as disallow-all)"
@@ -1242,16 +1274,20 @@ class Fetcher:
                 else:
                     rp.parse(r.text.splitlines())
                     self.robots_note[host] = "robots.txt ok"
+            except httpx.TooManyRedirects:          # RFC 9309: >5 redirects => treat as unavailable (no rules)
+                rp.parse([])
+                self.robots_note[host] = "robots.txt redirect loop (treated as no robots.txt)"
             except Exception as e:                  # unreachable host: be conservative
                 log.debug(f"[robots] {host}: {e}")
                 rp.disallow_all = True
-                self.robots_note[host] = f"robots.txt unreachable ({type(e).__name__})"
+                self.robots_note[host] = f"robots.txt unreachable ({type(e).__name__}) — site down or blocking GitHub"
             self._robots[host] = rp
             return rp
 
     async def get(self, url: str, *, respect_robots: bool = True,
                   delay: Optional[float] = None, headers: Optional[dict] = None) -> FetchResult:
         delay = DOMAIN_DELAY if delay is None else delay
+        delay = max(delay, self.host_overrides.get(host_key(urlparse(url).netloc), 0))
         if respect_robots:
             rp = await self.robots(url)
             if not rp.can_fetch(BOT_TOKEN, url):
@@ -1341,6 +1377,7 @@ _EXCLUDE_PATH = re.compile(
     r"\.(jpg|jpeg|png|gif|webp|pdf|xml|mp3|mp4|css|js)$",
     re.I,
 )
+_MEDIA_EXT = re.compile(r"\.(jpg|jpeg|png|gif|webp|pdf|xml|mp3|mp4|css|js)$", re.I)
 _ARTICLE_HINT = re.compile(r"(/20\d{2}/\d{1,2}/)|(\d{5,})|([a-z0-9]+(?:-[a-z0-9]+){3,})", re.I)
 
 
@@ -1384,21 +1421,39 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
     root = f"{bp.scheme}://{bp.netloc}"
     prefix = bp.path.rstrip("/") if bp.path not in ("", "/") else ""
     src_host = host_key(bp.netloc)
+    hosts = {src_host} | {host_key(h) for h in src.get("hosts", [])}
+    domains = {reg_domain(src_host)} | {reg_domain(h) for h in src.get("hosts", [])}
     found: dict[str, Candidate] = {}
     dropped = Counter()
+    other_hosts = Counter()
+
+    # Homepage first: if the site has moved or redirects to another host, follow it
+    home = await f.get(base)
+    if home.resp is not None:
+        final_host = host_key(urlparse(str(home.resp.url)).netloc)
+        if final_host and final_host not in hosts:
+            hosts.add(final_host)
+            domains.add(reg_domain(final_host))
 
     def add(url: str, published=None, via: str = "", title: str = "", summary: str = ""):
         cu = canonicalize(url)
         if not cu:
             return
         up = urlparse(cu)
-        if host_key(up.netloc) != src_host:
+        h = host_key(up.netloc)
+        # Sitemaps and feeds are the site's own declarations: accept its subdomains and sister domains
+        # (amp./m./en. hosts, a renamed domain). Homepage links must be on the site itself.
+        if h not in hosts and not (via in ("rss", "sitemap") and reg_domain(h) in domains):
             dropped["other_site"] += 1
+            other_hosts[h] += 1
             return
         if prefix and via != "rss" and not up.path.startswith(prefix):
             dropped["outside_section"] += 1
             return
-        if up.path in ("", "/") or _EXCLUDE_PATH.search(up.path):
+        if up.path in ("", "/") or _MEDIA_EXT.search(up.path):
+            dropped["tag/video/page_url"] += 1
+            return
+        if via != "rss" and _EXCLUDE_PATH.search(up.path) and not looks_like_article(up.path):
             dropped["tag/video/page_url"] += 1
             return
         if via != "rss" and not looks_like_article(up.path):
@@ -1439,7 +1494,11 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
             continue
         sm_notes["ok"] += 1
         children, urls = parse_sitemap(res.resp.content)
+        if not children and not urls:
+            dropped["sitemap_empty_or_unreadable"] += 1
         fresh_children = [(u, d) for u, d in children if d is None or d >= cutoff]
+        if children and not fresh_children:
+            dropped["all_child_sitemaps_older_than_lookback"] += 1
         queue.extend(_prioritise_sitemaps(fresh_children))
         news_like = "news" in sm.lower()
         for u, d in urls:
@@ -1449,7 +1508,6 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
             add(u, d, "sitemap")
 
     # 2) RSS / Atom: configured + auto-discovered from homepage <link rel=alternate>
-    home = await f.get(base)
     feed_notes = Counter()
     html = ""
     if home.resp and "html" in home.resp.headers.get("content-type", "").lower():
@@ -1484,7 +1542,11 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
     if cands:
         log.info(f"[Discover] {src['name']}: {len(cands)} candidates {dict(vias)}")
     else:
-        home_note = "ok" if home.resp else (home.reason if home.reason != "gone" else f"HTTP {home.status}")
+        home_note = ("ok" if home.resp else "blocked by robots.txt (site disallows crawlers)" if home.reason == "robots"
+                     else (home.reason if home.reason != "gone" else f"HTTP {home.status}"))
+        if other_hosts:
+            top = ", ".join(f"{h} ×{n}" for h, n in other_hosts.most_common(2))
+            dropped["other_site"] = f"{dropped['other_site']} (mostly {top})"
         why = (f"{f.robots_note.get(bp.netloc.lower(), 'robots.txt ?')}; homepage: {home_note}; "
                f"sitemaps: {dict(sm_notes) or 'none listed'}; feeds: {dict(feed_notes) or 'none found'}; "
                f"filtered: {dict(dropped) or 'nothing'}")
@@ -1973,6 +2035,8 @@ CREATE TABLE IF NOT EXISTS brand_backfill(name TEXT PRIMARY KEY, spec_hash TEXT,
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 -- URLs discovered but not fetched before the time budget ran out; fetched first next run
 CREATE TABLE IF NOT EXISTS pending(url TEXT PRIMARY KEY, data TEXT, added_at TEXT);
+-- Outlets that keep blocking us are rested for a week instead of being retried every run
+CREATE TABLE IF NOT EXISTS source_health(name TEXT PRIMARY KEY, fails INTEGER, last_reason TEXT, skip_until TEXT);
 
 -- Full-text index over every stored article: this is what makes ANY brand searchable,
 -- including ones nobody listed when the article was collected.
@@ -2334,6 +2398,31 @@ async def process_candidates(conn: sqlite3.Connection, f: Fetcher, cands: list[C
     return stats
 
 
+_HARD_FAIL = ("HTTP 403", "unreachable", "disallows crawlers", "homepage: HTTP 404", "HTTP 401")
+
+
+def sources_to_skip(conn: sqlite3.Connection) -> dict:
+    now = iso(now_utc())
+    return {n: (until, why) for n, until, why in conn.execute(
+        "SELECT name, skip_until, last_reason FROM source_health WHERE skip_until > ?", (now,))}
+
+
+def update_source_health(conn: sqlite3.Connection, crawled: list, diag: dict):
+    """Count consecutive runs in which an outlet blocked us or was unreachable; rest it after
+    SKIP_AFTER_FAILURES. Any run where it works (or fails softly, e.g. a timeout) resets the count."""
+    for src in crawled:
+        name = src["name"]
+        why = diag.get(name, "")
+        if why and any(k in why for k in _HARD_FAIL):
+            row = conn.execute("SELECT fails FROM source_health WHERE name = ?", (name,)).fetchone()
+            fails = (row[0] if row else 0) + 1
+            until = iso(now_utc() + dt.timedelta(days=SKIP_DAYS)) if fails >= SKIP_AFTER_FAILURES else ""
+            conn.execute("INSERT OR REPLACE INTO source_health VALUES (?,?,?,?)", (name, fails, why, until))
+        else:
+            conn.execute("DELETE FROM source_health WHERE name = ?", (name,))
+    conn.commit()
+
+
 async def _discover_all(f: Fetcher, sources: list, cutoff: dt.datetime, registry: dict,
                         use_indexes: bool, stats: Counter, diag: dict) -> list[Candidate]:
     """All outlets and the global indexes in parallel, each outlet with its own timeout and the
@@ -2342,9 +2431,10 @@ async def _discover_all(f: Fetcher, sources: list, cutoff: dt.datetime, registry
 
     async def one(src):
         try:
-            return await asyncio.wait_for(discover_source(f, src, cutoff, diag), SOURCE_DISCOVERY_TIMEOUT)
+            limit = float(src.get("discovery_timeout", SOURCE_DISCOVERY_TIMEOUT))
+            return await asyncio.wait_for(discover_source(f, src, cutoff, diag), limit)
         except asyncio.TimeoutError:
-            diag[src["name"]] = f"discovery timed out after {SOURCE_DISCOVERY_TIMEOUT:.0f}s (slow site)"
+            diag[src["name"]] = f"discovery timed out after {limit:.0f}s (slow site)"
             log.info(f"[Discover] {src['name']}: timed out")
             return []
 
@@ -2383,6 +2473,7 @@ async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBas
     conn = db_connect(db_path)
     stats: Counter = Counter()
     diag: dict = {}
+    skipped: dict = {}
     finished = False
 
     try:
@@ -2398,11 +2489,19 @@ async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBas
         pending = load_pending(conn)
         if pending:
             log.info(f"[Stage 0] {len(pending)} URLs carried over from the previous run")
+        skipped = sources_to_skip(conn)
+        crawl_now = [s_ for s_ in sources if s_["name"] not in skipped]
+        if skipped:
+            log.info(f"[Stage 0] resting {len(skipped)} outlets that blocked us {SKIP_AFTER_FAILURES} runs in a row")
 
         async with make_client(transport) as client:
             f = Fetcher(client)
+            for s_ in SOURCES:
+                if s_.get("delay"):
+                    f.host_overrides[host_key(urlparse(s_["url"]).netloc)] = float(s_["delay"])
             log.info("[Stage 1] Discovery")
-            cands = pending + await _discover_all(f, sources, cutoff, registry, use_indexes, stats, diag)
+            cands = pending + await _discover_all(f, crawl_now, cutoff, registry, use_indexes, stats, diag)
+            update_source_health(conn, crawl_now, diag)
             await process_candidates(conn, f, cands, cutoff, stats, deadline=deadline)
             stats["http_requests"] = f.requests
         finished = True
@@ -2423,6 +2522,10 @@ async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBas
         log.info(f"Outlets with nothing collected this run ({len(diag)}) — fix or remove these in SOURCES:")
         for name, why in sorted(diag.items()):
             log.info(f"  - {name}: {why}")
+    if skipped:
+        log.info(f"Outlets rested this run ({len(skipped)}) — blocked us {SKIP_AFTER_FAILURES} runs in a row; retried automatically:")
+        for name, (until, why) in sorted(skipped.items()):
+            log.info(f"  - {name} (until {until[:10]}): {why.split(';')[0]}")
     if per_source:
         log.info("Saved this run by outlet: " + ", ".join(f"{s_} {n}" for s_, n in per_source[:25])
                  + (" …" if len(per_source) > 25 else ""))
