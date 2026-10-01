@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import asyncio
@@ -41,11 +42,11 @@ MAX_FETCH = int(os.getenv("MP_MAX_FETCH", "6000"))
 # killed by the CI job limit before it saves. Discovery gets its own, smaller budget.
 TIME_BUDGET_MIN = float(os.getenv("MP_TIME_BUDGET_MIN", "100"))
 DISCOVERY_BUDGET_MIN = float(os.getenv("MP_DISCOVERY_BUDGET_MIN", "15"))
-SOURCE_DISCOVERY_TIMEOUT = float(os.getenv("MP_SOURCE_DISCOVERY_TIMEOUT", "150"))   # seconds per outlet
-MAX_PER_HOST = int(os.getenv("MP_MAX_PER_HOST", "80"))          # article fetches per site per run
+SOURCE_DISCOVERY_TIMEOUT = float(os.getenv("MP_SOURCE_DISCOVERY_TIMEOUT", "240"))   # seconds per outlet
+MAX_PER_HOST = int(os.getenv("MP_MAX_PER_HOST", "60"))          # article fetches per site per run
 PENDING_MAX_AGE_DAYS = 3
 MAX_SITEMAPS = int(os.getenv("MP_MAX_SITEMAPS", "6"))
-CONCURRENCY = int(os.getenv("MP_CONCURRENCY", "16"))
+CONCURRENCY = int(os.getenv("MP_CONCURRENCY", "24"))
 DOMAIN_DELAY = float(os.getenv("MP_DOMAIN_DELAY", "2.0"))
 REQUEST_TIMEOUT = float(os.getenv("MP_TIMEOUT", "20"))
 ENABLE_GDELT = os.getenv("MP_ENABLE_GDELT", "1") == "1"
@@ -412,7 +413,8 @@ SOURCES = [
      "tier": "trade", "feeds": ["https://kenyawallstreet.com/feed/"]},
     {"name": "The EastAfrican", "url": "https://www.theeastafrican.co.ke", "country": "KE", "lang": "en", "tier": "national"},
     {"name": "Taifa Leo", "url": "https://taifaleo.nation.co.ke", "country": "KE", "lang": "sw", "tier": "national"},
-    {"name": "BBC Swahili", "url": "https://www.bbc.com/swahili", "country": "PAN", "lang": "sw", "tier": "international"},
+    {"name": "BBC Swahili", "url": "https://www.bbc.com/swahili", "country": "PAN", "lang": "sw", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/swahili/rss.xml"]},
 
     # ── Uganda ───────────────────────────────────────────────
     {"name": "Daily Monitor", "url": "https://www.monitor.co.ug", "country": "UG", "lang": "en", "tier": "national"},
@@ -535,18 +537,28 @@ SOURCES = [
 
     # ── African-language outlets ─────────────────────────────
     # BBC World Service African-language services (one host, separate sections)
-    {"name": "BBC Hausa", "url": "https://www.bbc.com/hausa", "country": "NG", "lang": "ha", "tier": "international"},
-    {"name": "BBC Yoruba", "url": "https://www.bbc.com/yoruba", "country": "NG", "lang": "yo", "tier": "international"},
-    {"name": "BBC Igbo", "url": "https://www.bbc.com/igbo", "country": "NG", "lang": "ig", "tier": "international"},
-    {"name": "BBC Pidgin", "url": "https://www.bbc.com/pidgin", "country": "NG", "lang": "pcm", "tier": "international"},
-    {"name": "BBC Amharic", "url": "https://www.bbc.com/amharic", "country": "ET", "lang": "am", "tier": "international"},
+    {"name": "BBC Hausa", "url": "https://www.bbc.com/hausa", "country": "NG", "lang": "ha", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/hausa/rss.xml"]},
+    {"name": "BBC Yoruba", "url": "https://www.bbc.com/yoruba", "country": "NG", "lang": "yo", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/yoruba/rss.xml"]},
+    {"name": "BBC Igbo", "url": "https://www.bbc.com/igbo", "country": "NG", "lang": "ig", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/igbo/rss.xml"]},
+    {"name": "BBC Pidgin", "url": "https://www.bbc.com/pidgin", "country": "NG", "lang": "pcm", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/pidgin/rss.xml"]},
+    {"name": "BBC Amharic", "url": "https://www.bbc.com/amharic", "country": "ET", "lang": "am", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/amharic/rss.xml"]},
     {"name": "BBC Afaan Oromoo", "url": "https://www.bbc.com/afaanoromoo", "country": "ET", "lang": "om",
-     "tier": "international"},
-    {"name": "BBC Tigrinya", "url": "https://www.bbc.com/tigrinya", "country": "ET", "lang": "ti", "tier": "international"},
-    {"name": "BBC Somali", "url": "https://www.bbc.com/somali", "country": "SO", "lang": "so", "tier": "international"},
-    {"name": "BBC Gahuza", "url": "https://www.bbc.com/gahuza", "country": "RW", "lang": "rw", "tier": "international"},
-    {"name": "BBC Afrique", "url": "https://www.bbc.com/afrique", "country": "PAN", "lang": "fr", "tier": "international"},
-    {"name": "BBC Arabic", "url": "https://www.bbc.com/arabic", "country": "PAN", "lang": "ar", "tier": "international"},
+     "tier": "international", "feeds": ["https://feeds.bbci.co.uk/afaanoromoo/rss.xml"]},
+    {"name": "BBC Tigrinya", "url": "https://www.bbc.com/tigrinya", "country": "ET", "lang": "ti", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/tigrinya/rss.xml"]},
+    {"name": "BBC Somali", "url": "https://www.bbc.com/somali", "country": "SO", "lang": "so", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/somali/rss.xml"]},
+    {"name": "BBC Gahuza", "url": "https://www.bbc.com/gahuza", "country": "RW", "lang": "rw", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/gahuza/rss.xml"]},
+    {"name": "BBC Afrique", "url": "https://www.bbc.com/afrique", "country": "PAN", "lang": "fr", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/afrique/rss.xml"]},
+    {"name": "BBC Arabic", "url": "https://www.bbc.com/arabic", "country": "PAN", "lang": "ar", "tier": "international",
+     "feeds": ["https://feeds.bbci.co.uk/arabic/rss.xml"]},
     {"name": "DW Kiswahili", "url": "https://www.dw.com/sw", "country": "PAN", "lang": "sw", "tier": "international"},
     # Local-language press
     {"name": "Aminiya", "url": "https://aminiya.ng", "country": "NG", "lang": "ha", "tier": "national"},
@@ -564,9 +576,206 @@ SOURCES = [
     {"name": "O País", "url": "https://opais.co.mz", "country": "MZ", "lang": "pt", "tier": "national"},
     {"name": "Jornal Notícias", "url": "https://jornalnoticias.co.mz", "country": "MZ", "lang": "pt", "tier": "national"},
 
+    # ══ ADDED OCT 2026 — wider coverage ══════════════════════════════════════
+    # ── Kenya ────────────────────────────────────────────────
+    {"name": "People Daily", "url": "https://www.pd.co.ke", "country": "KE", "lang": "en", "tier": "national"},
+    {"name": "Kenya News Agency", "url": "https://www.kenyanews.go.ke", "country": "KE", "lang": "en", "tier": "national"},
+    {"name": "Business Today Kenya", "url": "https://businesstoday.co.ke", "country": "KE", "lang": "en", "tier": "trade"},
+    {"name": "Techweez", "url": "https://techweez.com", "country": "KE", "lang": "en", "tier": "trade"},
+    {"name": "TechTrendsKE", "url": "https://techtrendske.co.ke", "country": "KE", "lang": "en", "tier": "trade"},
+    {"name": "The Elephant", "url": "https://www.theelephant.info", "country": "KE", "lang": "en", "tier": "trade"},
+    # ── Uganda / Tanzania / Rwanda ──────────────────────────
+    {"name": "The Observer Uganda", "url": "https://observer.ug", "country": "UG", "lang": "en", "tier": "national"},
+    {"name": "ChimpReports", "url": "https://chimpreports.com", "country": "UG", "lang": "en", "tier": "digital"},
+    {"name": "IPP Media (The Guardian TZ)", "url": "https://www.ippmedia.com", "country": "TZ", "lang": "en",
+     "tier": "national"},
+    {"name": "The Chanzo", "url": "https://thechanzo.com", "country": "TZ", "lang": "en", "tier": "digital"},
+    {"name": "KT Press", "url": "https://www.ktpress.rw", "country": "RW", "lang": "en", "tier": "digital"},
+    {"name": "Taarifa Rwanda", "url": "https://taarifa.rw", "country": "RW", "lang": "en", "tier": "digital"},
+    {"name": "IGIHE", "url": "https://igihe.com", "country": "RW", "lang": "rw", "tier": "national"},
+    # ── Ethiopia / Horn / Sudans ────────────────────────────
+    {"name": "The Reporter Ethiopia", "url": "https://www.thereporterethiopia.com", "country": "ET", "lang": "en",
+     "tier": "national"},
+    {"name": "Addis Fortune", "url": "https://addisfortune.news", "country": "ET", "lang": "en", "tier": "trade"},
+    {"name": "Capital Ethiopia", "url": "https://www.capitalethiopia.com", "country": "ET", "lang": "en", "tier": "trade"},
+    {"name": "Fana Broadcasting", "url": "https://www.fanabc.com", "country": "ET", "lang": "en", "tier": "national"},
+    {"name": "Ethiopian News Agency", "url": "https://www.ena.et", "country": "ET", "lang": "en", "tier": "national"},
+    {"name": "Garowe Online", "url": "https://www.garoweonline.com", "country": "SO", "lang": "en", "tier": "national"},
+    {"name": "Horseed Media", "url": "https://horseedmedia.net", "country": "SO", "lang": "en", "tier": "digital"},
+    {"name": "Radio Tamazuj", "url": "https://www.radiotamazuj.org", "country": "SS", "lang": "en", "tier": "national"},
+    {"name": "Eye Radio", "url": "https://www.eyeradio.org", "country": "SS", "lang": "en", "tier": "national"},
+    {"name": "Sudan Tribune", "url": "https://sudantribune.com", "country": "SD", "lang": "en", "tier": "national"},
+    # ── Nigeria ──────────────────────────────────────────────
+    {"name": "The Nation Nigeria", "url": "https://thenationonlineng.net", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "ThisDay", "url": "https://www.thisdaylive.com", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "Leadership", "url": "https://leadership.ng", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "Nigerian Tribune", "url": "https://tribuneonlineng.com", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "The Sun Nigeria", "url": "https://sunnewsonline.com", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "Independent Nigeria", "url": "https://independent.ng", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "Blueprint", "url": "https://blueprint.ng", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "P.M. News", "url": "https://pmnewsnigeria.com", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "Daily Post Nigeria", "url": "https://dailypost.ng", "country": "NG", "lang": "en", "tier": "digital"},
+    {"name": "Sahara Reporters", "url": "https://saharareporters.com", "country": "NG", "lang": "en", "tier": "digital"},
+    {"name": "Ripples Nigeria", "url": "https://www.ripplesnigeria.com", "country": "NG", "lang": "en", "tier": "digital"},
+    {"name": "Peoples Gazette", "url": "https://gazettengr.com", "country": "NG", "lang": "en", "tier": "digital"},
+    {"name": "HumAngle", "url": "https://humanglemedia.com", "country": "NG", "lang": "en", "tier": "trade"},
+    {"name": "Legit.ng", "url": "https://www.legit.ng", "country": "NG", "lang": "en", "tier": "digital"},
+    {"name": "Pulse Nigeria", "url": "https://www.pulse.ng", "country": "NG", "lang": "en", "tier": "digital"},
+    {"name": "Arise News", "url": "https://www.arise.tv", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "TVC News", "url": "https://www.tvcnews.tv", "country": "NG", "lang": "en", "tier": "national"},
+    {"name": "Business Post Nigeria", "url": "https://businesspost.ng", "country": "NG", "lang": "en", "tier": "trade"},
+    {"name": "Techeconomy", "url": "https://techeconomy.ng", "country": "NG", "lang": "en", "tier": "trade"},
+    {"name": "Brand Communicator", "url": "https://brandcom.ng", "country": "NG", "lang": "en", "tier": "trade"},
+    {"name": "Marketing Edge", "url": "https://www.marketingedge.com.ng", "country": "NG", "lang": "en", "tier": "trade"},
+    # ── Ghana / Liberia / Sierra Leone / Gambia ─────────────
+    {"name": "Modern Ghana", "url": "https://www.modernghana.com", "country": "GH", "lang": "en", "tier": "digital"},
+    {"name": "Ghana News Agency", "url": "https://gna.org.gh", "country": "GH", "lang": "en", "tier": "national"},
+    {"name": "3News", "url": "https://3news.com", "country": "GH", "lang": "en", "tier": "national"},
+    {"name": "Adom Online", "url": "https://www.adomonline.com", "country": "GH", "lang": "en", "tier": "national"},
+    {"name": "Business & Financial Times", "url": "https://thebftonline.com", "country": "GH", "lang": "en",
+     "tier": "trade"},
+    {"name": "Pulse Ghana", "url": "https://www.pulse.com.gh", "country": "GH", "lang": "en", "tier": "digital"},
+    {"name": "Yen.com.gh", "url": "https://yen.com.gh", "country": "GH", "lang": "en", "tier": "digital"},
+    {"name": "FrontPage Africa", "url": "https://frontpageafricaonline.com", "country": "LR", "lang": "en",
+     "tier": "national"},
+    {"name": "Liberian Observer", "url": "https://www.liberianobserver.com", "country": "LR", "lang": "en",
+     "tier": "national"},
+    {"name": "Awoko", "url": "https://awokonewspaper.sl", "country": "SL", "lang": "en", "tier": "national"},
+    {"name": "Sierraloaded", "url": "https://www.sierraloaded.sl", "country": "SL", "lang": "en", "tier": "digital"},
+    {"name": "The Point (Gambia)", "url": "https://thepoint.gm", "country": "GM", "lang": "en", "tier": "national"},
+    {"name": "Foroyaa", "url": "https://foroyaa.net", "country": "GM", "lang": "en", "tier": "national"},
+    # ── Francophone West & Central Africa ───────────────────
+    {"name": "Dakaractu", "url": "https://www.dakaractu.com", "country": "SN", "lang": "fr", "tier": "digital"},
+    {"name": "Le Soleil (Sénégal)", "url": "https://lesoleil.sn", "country": "SN", "lang": "fr", "tier": "national"},
+    {"name": "APS Sénégal", "url": "https://aps.sn", "country": "SN", "lang": "fr", "tier": "national"},
+    {"name": "Senego", "url": "https://senego.com", "country": "SN", "lang": "fr", "tier": "digital"},
+    {"name": "Fraternité Matin", "url": "https://www.fratmat.info", "country": "CI", "lang": "fr", "tier": "national"},
+    {"name": "Koaci", "url": "https://www.koaci.com", "country": "CI", "lang": "fr", "tier": "digital"},
+    {"name": "Linfodrome", "url": "https://www.linfodrome.com", "country": "CI", "lang": "fr", "tier": "digital"},
+    {"name": "LeFaso.net", "url": "https://lefaso.net", "country": "BF", "lang": "fr", "tier": "national"},
+    {"name": "Burkina24", "url": "https://burkina24.com", "country": "BF", "lang": "fr", "tier": "digital"},
+    {"name": "Maliweb", "url": "https://www.maliweb.net", "country": "ML", "lang": "fr", "tier": "digital"},
+    {"name": "ActuNiger", "url": "https://www.actuniger.com", "country": "NE", "lang": "fr", "tier": "digital"},
+    {"name": "La Nouvelle Tribune (Bénin)", "url": "https://lanouvelletribune.info", "country": "BJ", "lang": "fr",
+     "tier": "digital"},
+    {"name": "Banouto", "url": "https://www.banouto.bj", "country": "BJ", "lang": "fr", "tier": "digital"},
+    {"name": "Republic of Togo", "url": "https://www.republicoftogo.com", "country": "TG", "lang": "fr",
+     "tier": "national"},
+    {"name": "Togo First", "url": "https://www.togofirst.com", "country": "TG", "lang": "fr", "tier": "trade"},
+    {"name": "Guinéenews", "url": "https://guineenews.org", "country": "GN", "lang": "fr", "tier": "digital"},
+    {"name": "Journal du Cameroun", "url": "https://www.journalducameroun.com", "country": "CM", "lang": "fr",
+     "tier": "digital"},
+    {"name": "Cameroon Tribune", "url": "https://www.cameroon-tribune.cm", "country": "CM", "lang": "fr",
+     "tier": "national"},
+    {"name": "Actu Cameroun", "url": "https://actucameroun.com", "country": "CM", "lang": "fr", "tier": "digital"},
+    {"name": "Investir au Cameroun", "url": "https://www.investiraucameroun.com", "country": "CM", "lang": "fr",
+     "tier": "trade"},
+    {"name": "Mimi Mefo Info", "url": "https://mimimefoinfos.com", "country": "CM", "lang": "en", "tier": "digital"},
+    {"name": "Actualite.cd", "url": "https://actualite.cd", "country": "CD", "lang": "fr", "tier": "national"},
+    {"name": "Radio Okapi", "url": "https://www.radiookapi.net", "country": "CD", "lang": "fr", "tier": "national"},
+    {"name": "7sur7.cd", "url": "https://7sur7.cd", "country": "CD", "lang": "fr", "tier": "digital"},
+    {"name": "Zoom Eco", "url": "https://zoom-eco.net", "country": "CD", "lang": "fr", "tier": "trade"},
+    # ── Indian Ocean ─────────────────────────────────────────
+    {"name": "L'Express de Madagascar", "url": "https://lexpress.mg", "country": "MG", "lang": "fr", "tier": "national"},
+    {"name": "Midi Madagasikara", "url": "https://midi-madagasikara.mg", "country": "MG", "lang": "fr",
+     "tier": "national"},
+    {"name": "L'Express Maurice", "url": "https://lexpress.mu", "country": "MU", "lang": "fr", "tier": "national"},
+    {"name": "Defimedia", "url": "https://defimedia.info", "country": "MU", "lang": "fr", "tier": "national"},
+    # ── Southern Africa ──────────────────────────────────────
+    {"name": "TimesLIVE", "url": "https://www.timeslive.co.za", "country": "ZA", "lang": "en", "tier": "national"},
+    {"name": "BusinessLIVE", "url": "https://www.businesslive.co.za", "country": "ZA", "lang": "en", "tier": "national"},
+    {"name": "Mail & Guardian", "url": "https://mg.co.za", "country": "ZA", "lang": "en", "tier": "national"},
+    {"name": "The Citizen (SA)", "url": "https://www.citizen.co.za", "country": "ZA", "lang": "en", "tier": "national"},
+    {"name": "SABC News", "url": "https://www.sabcnews.com", "country": "ZA", "lang": "en", "tier": "national"},
+    {"name": "eNCA", "url": "https://www.enca.com", "country": "ZA", "lang": "en", "tier": "national"},
+    {"name": "SowetanLIVE", "url": "https://www.sowetanlive.co.za", "country": "ZA", "lang": "en", "tier": "national"},
+    {"name": "The South African", "url": "https://www.thesouthafrican.com", "country": "ZA", "lang": "en",
+     "tier": "digital"},
+    {"name": "BusinessTech", "url": "https://businesstech.co.za", "country": "ZA", "lang": "en", "tier": "trade"},
+    {"name": "ITWeb", "url": "https://www.itweb.co.za", "country": "ZA", "lang": "en", "tier": "trade"},
+    {"name": "Bizcommunity", "url": "https://www.bizcommunity.com", "country": "ZA", "lang": "en", "tier": "trade"},
+    {"name": "Ventureburn", "url": "https://ventureburn.com", "country": "ZA", "lang": "en", "tier": "trade"},
+    {"name": "Lusaka Times", "url": "https://www.lusakatimes.com", "country": "ZM", "lang": "en", "tier": "digital"},
+    {"name": "Zambia Daily Mail", "url": "https://www.daily-mail.co.zm", "country": "ZM", "lang": "en", "tier": "national"},
+    {"name": "News Diggers", "url": "https://diggers.news", "country": "ZM", "lang": "en", "tier": "national"},
+    {"name": "Zambia Monitor", "url": "https://www.zambiamonitor.com", "country": "ZM", "lang": "en", "tier": "trade"},
+    {"name": "Mwebantu", "url": "https://www.mwebantu.com", "country": "ZM", "lang": "en", "tier": "digital"},
+    {"name": "The Herald (Zimbabwe)", "url": "https://www.herald.co.zw", "country": "ZW", "lang": "en", "tier": "national"},
+    {"name": "The Chronicle (Zimbabwe)", "url": "https://www.chronicle.co.zw", "country": "ZW", "lang": "en",
+     "tier": "national"},
+    {"name": "NewsDay Zimbabwe", "url": "https://www.newsday.co.zw", "country": "ZW", "lang": "en", "tier": "national"},
+    {"name": "ZimLive", "url": "https://www.zimlive.com", "country": "ZW", "lang": "en", "tier": "digital"},
+    {"name": "NewZimbabwe", "url": "https://www.newzimbabwe.com", "country": "ZW", "lang": "en", "tier": "digital"},
+    {"name": "Bulawayo24", "url": "https://bulawayo24.com", "country": "ZW", "lang": "en", "tier": "digital"},
+    {"name": "Nyasa Times", "url": "https://www.nyasatimes.com", "country": "MW", "lang": "en", "tier": "digital"},
+    {"name": "Malawi24", "url": "https://malawi24.com", "country": "MW", "lang": "en", "tier": "digital"},
+    {"name": "The Nation (Malawi)", "url": "https://mwnation.com", "country": "MW", "lang": "en", "tier": "national"},
+    {"name": "Times 360 Malawi", "url": "https://times.mw", "country": "MW", "lang": "en", "tier": "national"},
+    {"name": "Club of Mozambique", "url": "https://clubofmozambique.com", "country": "MZ", "lang": "en", "tier": "trade"},
+    {"name": "ANGOP", "url": "https://www.angop.ao", "country": "AO", "lang": "pt", "tier": "national"},
+    {"name": "Expansão", "url": "https://expansao.co.ao", "country": "AO", "lang": "pt", "tier": "trade"},
+    {"name": "The Namibian", "url": "https://www.namibian.com.na", "country": "NA", "lang": "en", "tier": "national"},
+    {"name": "New Era (Namibia)", "url": "https://neweralive.na", "country": "NA", "lang": "en", "tier": "national"},
+    {"name": "Namibian Sun", "url": "https://www.namibiansun.com", "country": "NA", "lang": "en", "tier": "national"},
+    {"name": "Mmegi", "url": "https://www.mmegi.bw", "country": "BW", "lang": "en", "tier": "national"},
+    {"name": "Sunday Standard (Botswana)", "url": "https://www.sundaystandard.info", "country": "BW", "lang": "en",
+     "tier": "national"},
+    {"name": "Lesotho Times", "url": "https://lestimes.com", "country": "LS", "lang": "en", "tier": "national"},
+    {"name": "Times of Eswatini", "url": "https://times.co.sz", "country": "SZ", "lang": "en", "tier": "national"},
+    # ── North Africa ─────────────────────────────────────────
+    {"name": "Ahram Online", "url": "https://english.ahram.org.eg", "country": "EG", "lang": "en", "tier": "national"},
+    {"name": "Egypt Today", "url": "https://www.egypttoday.com", "country": "EG", "lang": "en", "tier": "national"},
+    {"name": "Mada Masr", "url": "https://www.madamasr.com", "country": "EG", "lang": "en", "tier": "national"},
+    {"name": "Enterprise", "url": "https://enterprise.press", "country": "EG", "lang": "en", "tier": "trade"},
+    {"name": "Al-Masry Al-Youm", "url": "https://www.almasryalyoum.com", "country": "EG", "lang": "ar",
+     "tier": "national"},
+    {"name": "Le360", "url": "https://fr.le360.ma", "country": "MA", "lang": "fr", "tier": "national"},
+    {"name": "Médias24", "url": "https://medias24.com", "country": "MA", "lang": "fr", "tier": "trade"},
+    {"name": "TelQuel", "url": "https://telquel.ma", "country": "MA", "lang": "fr", "tier": "national"},
+    {"name": "Le Matin (Maroc)", "url": "https://lematin.ma", "country": "MA", "lang": "fr", "tier": "national"},
+    {"name": "TSA Algérie", "url": "https://www.tsa-algerie.com", "country": "DZ", "lang": "fr", "tier": "national"},
+    {"name": "APS Algérie", "url": "https://www.aps.dz", "country": "DZ", "lang": "fr", "tier": "national"},
+    {"name": "Kapitalis", "url": "https://kapitalis.com", "country": "TN", "lang": "fr", "tier": "national"},
+    {"name": "Business News Tunisie", "url": "https://www.businessnews.com.tn", "country": "TN", "lang": "fr",
+     "tier": "trade"},
+    {"name": "La Presse de Tunisie", "url": "https://lapresse.tn", "country": "TN", "lang": "fr", "tier": "national"},
+    {"name": "Libya Observer", "url": "https://libyaobserver.ly", "country": "LY", "lang": "en", "tier": "national"},
+    {"name": "Libya Herald", "url": "https://libyaherald.com", "country": "LY", "lang": "en", "tier": "national"},
+    # ── Pan-African business, tech, marketing ───────────────
+    {"name": "Business Insider Africa", "url": "https://africa.businessinsider.com", "country": "PAN", "lang": "en",
+     "tier": "trade"},
+    {"name": "CNBC Africa", "url": "https://www.cnbcafrica.com", "country": "PAN", "lang": "en", "tier": "national"},
+    {"name": "African Business", "url": "https://african.business", "country": "PAN", "lang": "en", "tier": "trade"},
+    {"name": "How We Made It In Africa", "url": "https://www.howwemadeitinafrica.com", "country": "PAN", "lang": "en",
+     "tier": "trade"},
+    {"name": "Further Africa", "url": "https://furtherafrica.com", "country": "PAN", "lang": "en", "tier": "trade"},
+    {"name": "IT News Africa", "url": "https://www.itnewsafrica.com", "country": "PAN", "lang": "en", "tier": "trade"},
+    {"name": "TechAfrica News", "url": "https://techafricanews.com", "country": "PAN", "lang": "en", "tier": "trade"},
+    {"name": "Connecting Africa", "url": "https://www.connectingafrica.com", "country": "PAN", "lang": "en",
+     "tier": "trade"},
+    {"name": "Benjamindada", "url": "https://www.benjamindada.com", "country": "PAN", "lang": "en", "tier": "trade"},
+    {"name": "Africa Check", "url": "https://africacheck.org", "country": "PAN", "lang": "en", "tier": "trade"},
+    {"name": "APA News", "url": "https://apanews.net", "country": "PAN", "lang": "en", "tier": "national"},
+    {"name": "VOA Africa", "url": "https://www.voaafrica.com", "country": "PAN", "lang": "en", "tier": "international"},
+    {"name": "VOA Afrique", "url": "https://www.voaafrique.com", "country": "PAN", "lang": "fr", "tier": "international"},
+    {"name": "BBC News Africa", "url": "https://www.bbc.com/news/world/africa", "country": "PAN", "lang": "en",
+     "tier": "international", "feeds": ["https://feeds.bbci.co.uk/news/world/africa/rss.xml"]},
+    {"name": "The Conversation Africa", "url": "https://theconversation.com/africa", "country": "PAN", "lang": "en",
+     "tier": "trade", "feeds": ["https://theconversation.com/africa/articles.atom"]},
+    {"name": "Le Monde Afrique", "url": "https://www.lemonde.fr/afrique", "country": "PAN", "lang": "fr",
+     "tier": "international", "feeds": ["https://www.lemonde.fr/afrique/rss_full.xml"]},
+    {"name": "Jeune Afrique", "url": "https://www.jeuneafrique.com", "country": "PAN", "lang": "fr", "tier": "national"},
+    {"name": "Financial Afrik", "url": "https://www.financialafrik.com", "country": "PAN", "lang": "fr",
+     "tier": "trade"},
+    {"name": "Agence Ecofin", "url": "https://www.agenceecofin.com", "country": "PAN", "lang": "fr", "tier": "trade"},
+    {"name": "Sika Finance", "url": "https://www.sikafinance.com", "country": "PAN", "lang": "fr", "tier": "trade"},
+    # allAfrica republishes hundreds of African papers: useful for reach, tagged so copies aren't counted as new coverage
+    {"name": "allAfrica", "url": "https://allafrica.com", "country": "PAN", "lang": "en", "tier": "syndication"},
+
     # ── International ────────────────────────────────────────
     {"name": "The Guardian (Africa)", "url": "https://www.theguardian.com/world/africa", "country": "GB", "lang": "en",
-     "tier": "international"},
+     "tier": "international",
+     "feeds": ["https://www.theguardian.com/world/africa/rss"]},
     # Aggregators / republishers: not crawled (huge, mostly irrelevant), but tagged when GDELT or
     # Google News surfaces one of their pages.
     {"name": "Yahoo! News UK", "url": "https://uk.news.yahoo.com", "country": "GB", "lang": "en",
@@ -827,7 +1036,7 @@ def model_orgs(text: str, lang: str) -> list[str]:
 try:
     import spacy
     try:
-        NLP = spacy.load("en_core_web_sm")
+        NLP = spacy.load("en_core_web_sm", exclude=["parser", "tagger", "lemmatizer", "attribute_ruler", "senter"])
     except OSError:
         NLP = None
         log.warning("[NER] en_core_web_sm missing — run: python -m spacy download en_core_web_sm")
@@ -966,6 +1175,7 @@ class Candidate:
     summary_hint: str = ""
     tier: str = ""
     fetch: bool = True        # False = keep title/summary only (e.g. Google News redirect links)
+    queued_at: str = ""       # when the URL first went to the pending queue
 
 
 @dataclass
@@ -1183,10 +1393,13 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
             return
         up = urlparse(cu)
         if host_key(up.netloc) != src_host:
+            dropped["other_site"] += 1
             return
-        if prefix and not up.path.startswith(prefix):
+        if prefix and via != "rss" and not up.path.startswith(prefix):
+            dropped["outside_section"] += 1
             return
         if up.path in ("", "/") or _EXCLUDE_PATH.search(up.path):
+            dropped["tag/video/page_url"] += 1
             return
         if via != "rss" and not looks_like_article(up.path):
             dropped["not_article"] += 1
@@ -1206,7 +1419,12 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
 
     # 1) Sitemaps listed in robots.txt (news sitemaps first), fallback /sitemap.xml
     rp = await f.robots(root + "/")
-    sitemaps = list(rp.site_maps() or []) or [root + "/sitemap.xml"]
+    if "sitemaps" in src:
+        sitemaps = list(src["sitemaps"])
+    elif prefix:
+        sitemaps = []        # a section of a big site (bbc.com/hausa): its host-wide sitemaps are slow and off-topic
+    else:
+        sitemaps = list(rp.site_maps() or []) or [root + "/sitemap.xml"]
     queue = deque(_prioritise_sitemaps([(s, None) for s in sitemaps]))
     visited: set[str] = set()
     sm_notes = Counter()
@@ -1226,6 +1444,7 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
         news_like = "news" in sm.lower()
         for u, d in urls:
             if d is None and not news_like:      # undated URLs in a general sitemap = archive noise
+                dropped["undated_in_sitemap"] += 1
                 continue
             add(u, d, "sitemap")
 
@@ -1253,7 +1472,10 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
 
     # 3) Homepage links — last resort when a site has no usable sitemap or feed
     if len(found) < 15:
-        for link in find_article_links(html, base):
+        links = find_article_links(html, base)
+        if html and not links:
+            dropped["homepage_has_no_article_links"] += 1
+        for link in links:
             add(link, None, "homepage")
 
     cands = sorted(found.values(), key=lambda c: c.published or EPOCH, reverse=True)
@@ -1661,7 +1883,7 @@ def ner_orgs(text: str, lang: str = "en") -> list[str]:
     if not text:
         return []
     if lang == "en":
-        raw = [e.text for e in NLP(text[:10000]).ents if e.label_ == "ORG"] if NLP else []
+        raw = [e.text for e in NLP(text[:5000]).ents if e.label_ == "ORG"] if NLP else []
     else:
         raw = model_orgs(text, lang)
     orgs = {re.sub(r"^(?:the|The)\s+", "", re.sub(r"\s+", " ", o).strip(" .,'\"’")) for o in raw}
@@ -1978,23 +2200,28 @@ def _cand_from_json(s_: str) -> Candidate:
 
 
 def load_pending(conn: sqlite3.Connection) -> list[Candidate]:
-    since = iso(now_utc() - dt.timedelta(days=PENDING_MAX_AGE_DAYS))
-    rows = conn.execute("SELECT data FROM pending WHERE added_at >= ?", (since,)).fetchall()
+    rows = conn.execute("SELECT data FROM pending").fetchall()
     conn.execute("DELETE FROM pending")
     conn.commit()
+    limit = now_utc() - dt.timedelta(days=PENDING_MAX_AGE_DAYS)
     out = []
     for (d,) in rows:
         try:
-            out.append(_cand_from_json(d))
+            c = _cand_from_json(d)
         except Exception:
-            pass
+            continue
+        if parse_date(c.queued_at) and parse_date(c.queued_at) < limit:
+            continue                     # waited too long — the story is stale now
+        out.append(c)
     return out
 
 
 def save_pending(conn: sqlite3.Connection, cands: list[Candidate]):
     now = iso(now_utc())
+    for c in cands:
+        c.queued_at = c.queued_at or now
     conn.executemany("INSERT OR REPLACE INTO pending VALUES (?,?,?)",
-                     [(c.url, _cand_to_json(c), now) for c in cands])
+                     [(c.url, _cand_to_json(c), c.queued_at) for c in cands])
     conn.commit()
 
 
@@ -2047,6 +2274,7 @@ async def process_candidates(conn: sqlite3.Connection, f: Fetcher, cands: list[C
         for i, c in enumerate(items):
             if time.monotonic() > deadline:
                 leftover.extend(items[i:])
+                stats["budget_hit"] = 1
                 return
             try:
                 await out_q.put(await fetch_candidate(f, c))
@@ -2124,7 +2352,7 @@ async def _discover_all(f: Fetcher, sources: list, cutoff: dt.datetime, registry
     if use_indexes:
         if ENABLE_GDELT:
             terms = list(registry) + [t for ts in MONITORING_TARGETS.values() for t in ts]
-            tasks[asyncio.create_task(discover_gdelt(f, terms, deadline=disc_deadline))] = "GDELT"
+            tasks[asyncio.create_task(discover_gdelt(f, terms, deadline=disc_deadline - 90))] = "GDELT"
         if ENABLE_GNEWS:
             tasks[asyncio.create_task(discover_google_news(f, registry))] = "Google News"
         if NEWS_API_KEY:
@@ -2198,8 +2426,10 @@ async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBas
     if per_source:
         log.info("Saved this run by outlet: " + ", ".join(f"{s_} {n}" for s_, n in per_source[:25])
                  + (" …" if len(per_source) > 25 else ""))
-    budget_note = (f" (time budget reached; {stats['queued_for_next_run']} URLs queued for the next run)"
-                   if stats.get("queued_for_next_run") else "")
+    q = stats.get("queued_for_next_run", 0)
+    why = ("time budget reached" if stats.get("budget_hit")
+           else f"busy sites hit the {MAX_PER_HOST}-per-site limit")
+    budget_note = f" ({why}; {q} URLs queued for the next run)" if q else ""
     log.info(f"Pipeline complete in {elapsed}s — saved {stats['saved']} articles, "
              f"{stats['brand_mentions']} brand mentions{budget_note}")
     log.info(f"Stats: {dict(stats)}")
