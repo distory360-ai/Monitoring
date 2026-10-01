@@ -1,4 +1,7 @@
-
+# OPTION A — the archive (data/mediapulse.db) is stored in the repo via Git LFS.
+# Simplest setup: no accounts or secrets beyond NEWS_API_KEY (optional).
+# Limit: every run commits a new copy of the database to LFS. Move to Option B
+# before data/mediapulse.db reaches ~100 MB, or the LFS quota runs out.
 name: MediaPulse crawl
 
 on:
@@ -87,4 +90,4 @@ jobs:
           if [ ! -f data/pipeline.log ]; then echo "::error::scraper.py wrote no log — it crashed at start-up (see the Crawl step)"; exit 1; fi
           grep -q "Pipeline complete" data/pipeline.log || { echo "::error::Crawl did not finish — partial results were still saved"; tail -50 data/pipeline.log; exit 1; }
           echo "### Crawl summary" >> "$GITHUB_STEP_SUMMARY"
-          grep -E "Pipeline complete|Outlets with nothing|^.*  - |Saved this run by outlet" data/pipeline.log | sed -E 's/^[0-9-]+ [0-9:,]+ \[INFO\] //' >> "$GITHUB_STEP_SUMMARY" || true
+          grep -E "Pipeline complete|Outlets with nothing|Outlets rested|^.*  - |Saved this run by outlet" data/pipeline.log | sed -E 's/^[0-9-]+ [0-9:,]+ \[INFO\] //' >> "$GITHUB_STEP_SUMMARY" || true
