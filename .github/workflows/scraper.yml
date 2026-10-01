@@ -1,7 +1,4 @@
-# OPTION A — the archive (data/mediapulse.db) is stored in the repo via Git LFS.
-# Simplest setup: no accounts or secrets beyond NEWS_API_KEY (optional).
-# Limit: every run commits a new copy of the database to LFS. Move to Option B
-# before data/mediapulse.db reaches ~100 MB, or the LFS quota runs out.
+
 name: MediaPulse crawl
 
 on:
