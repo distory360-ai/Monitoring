@@ -16,7 +16,7 @@ permissions:
 jobs:
   crawl:
     runs-on: ubuntu-24.04        # pinned: ubuntu-latest moves to Ubuntu 26 from Oct 19, 2026
-    timeout-minutes: 180
+    timeout-minutes: 175
     env:
       MP_USER_AGENT: "MediaPulseBot/5.0 (+https://mediapulse.africa/bot; bot@mediapulse.africa)"  # use your real URL/email
       NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
@@ -55,21 +55,36 @@ jobs:
           fi
 
       - name: Crawl
+        id: crawl
+        timeout-minutes: 140         # hard stop; the crawler itself stops at MP_TIME_BUDGET_MIN
+        env:
+          MP_TIME_BUDGET_MIN: "110"  # minutes of crawling per run; unfetched URLs carry over to the next run
         run: |
           rm -f data/pipeline.log      # start a fresh log so the check below only sees this run
           python scraper.py
 
-      - name: Stop if the crawl failed
+      - name: Flush database to a single file
+        if: always() && steps.crawl.outcome != 'skipped'
         run: |
-          if [ ! -f data/pipeline.log ]; then echo "::error::scraper.py wrote no log — it crashed at start-up (see the Crawl step)"; exit 1; fi
-          grep -q "Pipeline complete" data/pipeline.log || { echo "::error::Crawl did not finish"; tail -50 data/pipeline.log; exit 1; }
+          if [ -f data/mediapulse.db ]; then
+            python -c "import sqlite3; c = sqlite3.connect('data/mediapulse.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
+          fi
 
       - name: Commit results
+        if: always() && steps.crawl.outcome != 'skipped'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add daily_news.csv data/brand_mentions.csv data/mediapulse.db
+          git add daily_news.csv data/brand_mentions.csv data/mediapulse.db 2>/dev/null || git add -A daily_news.csv data/ 2>/dev/null || true
           git diff --cached --quiet && { echo "Nothing new"; exit 0; }
           git commit -m "Update pipeline data"
           git pull --rebase
           git push
+
+      - name: Report crawl result
+        if: always() && steps.crawl.outcome != 'skipped'
+        run: |
+          if [ ! -f data/pipeline.log ]; then echo "::error::scraper.py wrote no log — it crashed at start-up (see the Crawl step)"; exit 1; fi
+          grep -q "Pipeline complete" data/pipeline.log || { echo "::error::Crawl did not finish — partial results were still saved"; tail -50 data/pipeline.log; exit 1; }
+          echo "### Crawl summary" >> "$GITHUB_STEP_SUMMARY"
+          grep -E "Pipeline complete|Outlets with nothing|^.*  - |Saved this run by outlet" data/pipeline.log | sed -E 's/^[0-9-]+ [0-9:,]+ \[INFO\] //' >> "$GITHUB_STEP_SUMMARY" || true
