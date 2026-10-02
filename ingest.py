@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -279,9 +278,29 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="list watchlist brands")
     ap.add_argument("--discover", action="store_true", help="organisations in the news you aren't tracking")
     ap.add_argument("--import-legacy", metavar="CSV", help="one-time import of the v3 daily_news.csv")
+    ap.add_argument("--reclassify", action="store_true",
+                    help="re-run brand matching over the whole archive (after editing brand rules)")
+    ap.add_argument("--audit", metavar="BRAND", help="show recent matches for a brand with why they matched")
     ap.add_argument("--db", default=p.DB_PATH)
     a = ap.parse_args(argv)
     split = lambda s: [x.strip() for x in s.split(",") if x.strip()]
+
+    if a.reclassify:
+        conn = p.db_connect(a.db)
+        n = p.reclassify_archive(conn, p.active_registry(conn), force=True)
+        print(f"Re-classified the archive with matcher {p.matcher_version()}: {n} brand mentions now stored.")
+        return
+    if a.audit:
+        conn = p.db_connect(a.db)
+        rows = conn.execute(f"""
+            SELECT {_date_expr()}, a.source, m.confidence, m.aliases_matched, m.match_reasons, a.title, m.snippet
+            FROM mentions m JOIN articles a ON a.id = m.article_id
+            WHERE lower(m.brand) = lower(?) ORDER BY 1 DESC LIMIT 40""", (a.audit,)).fetchall()
+        print(f"Last {len(rows)} matches for {a.audit} — check the snippet; if a match is wrong, add the phrase "
+              "to that brand's \"exclude\" list (or a word to \"not_near\") and run --reclassify")
+        for d, src, conf, aliases, why, title, snip in rows:
+            print(f"\n[{(d or '')[:10]}] {src} | {conf or '?'} | matched: {aliases} | {why or ''}\n  {title}\n  …{snip}…")
+        return
 
     if a.import_legacy:
         conn = p.db_connect(a.db)
