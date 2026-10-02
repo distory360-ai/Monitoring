@@ -830,22 +830,6 @@ CATEGORY_WORDS_AFRICAN = {
 # ════════════════════════════════════════════════════════════════════════════
 # PART 2 — LANGUAGES
 # ════════════════════════════════════════════════════════════════════════════
-# MediaPulse Africa — African-language support shared by pipeline.py and search.py.
-#
-# What this handles:
-#   * Language codes: the detector (py3langid) recognises Swahili, Hausa, Yoruba, Igbo,
-#     Nigerian Pidgin, Amharic, Somali, Oromo, Kinyarwanda, Luganda, Shona, Zulu, Xhosa,
-#     Afrikaans, Sesotho, Sepedi, Lingala, Gikuyu, Malagasy, Fulfulde, Kabyle, Arabic
-#     (incl. Egyptian/Moroccan), Portuguese and French. For languages it can't recognise
-#     (Tigrinya, Wolof, Twi, Ewe, Kirundi, Chichewa, Dholuo, ...) the source's declared
-#     language or the page's <html lang> is trusted instead.
-#   * Scripts: Ge'ez (Amharic, Tigrinya) and Arabic script attach prefixes to words
-#     (የ-/በ-/ለ- ; و-/ب-/ل-), so brand names inside them can't be matched on word
-#     boundaries, and both scripts have interchangeable spellings. Text and aliases in
-#     these scripts are normalised and matched as substrings.
-#   * Optional models for sentiment and organisation detection beyond English (see
-#     MP_SENTIMENT_MODEL / MP_NER_MODEL below). Without them, non-English articles are
-#     stored, indexed, searched and brand-matched, but sentiment is "Not scored".
 
 
 
@@ -1781,7 +1765,7 @@ async def fetch_candidate(f: Fetcher, c: Candidate):
 # ─────────────────────────────────────────────
 # ANALYSIS
 # ─────────────────────────────────────────────
-class TermMatcher:
+class _LegacyTermMatcher:
     """Latin script: word-boundary matching; short ALL-CAPS aliases are case-sensitive.
     Ge'ez / Arabic script: normalised substring matching (prefixes attach to words there).
     Optional context words disambiguate names like Shell / Bolt / Glo."""
@@ -1850,8 +1834,55 @@ class TermMatcher:
         return results
 
 
+
+try:
+    import brand_matcher as _bm                 # shared with the social and X pipelines
+except ImportError:
+    _bm = None
+
+
+class TermMatcher:
+    """Brand matcher used for articles. With brand_matcher.py present (recommended) it applies the
+    misclassification rules there: exclusions, context near the hit, longest match wins, list and
+    price-table detection, and a confidence per mention (low-confidence mentions are dropped unless
+    MIN_BRAND_CONFIDENCE=low). Without it, falls back to the older matcher and logs a warning."""
+
+    def __init__(self, registry: dict):
+        self.core = _bm.BrandMatcher(registry, normalize=normalize_script) if _bm else None
+        self.legacy = None if self.core else _LegacyTermMatcher(registry)
+
+    def find(self, text: str, title: str = "", lang: Optional[str] = None,
+             score_sentiment: bool = False) -> list[dict]:
+        if self.legacy:
+            out = self.legacy.find(text, title, lang=lang, score_sentiment=score_sentiment)
+            for m in out:
+                m.setdefault("confidence", "")
+                m.setdefault("match_reasons", "")
+                m.setdefault("prominence", "")
+            return out
+        if lang is None and score_sentiment:
+            lang = "en"
+        results = []
+        for m in self.core.match(text, title):
+            score, label = (None, "Not scored")
+            if lang and scorable(lang):
+                vals = [v for v, _ in (sentiment_for(w, lang) for w in m["windows"]) if v is not None]
+                if vals:
+                    score = round(sum(vals) / len(vals), 4)
+                    label = polarity_label(score)
+            results.append({
+                "brand": m["brand"], "brand_country": m["country"], "sector": m["sector"],
+                "aliases_matched": ", ".join(m["aliases"]), "hit_count": m["hit_count"],
+                "in_title": int(m["in_title"]), "sentiment_score": score, "sentiment_label": label,
+                "snippet": clean_text(m["windows"][0])[:320], "confidence": m["confidence"],
+                "match_reasons": "; ".join(m["reasons"]), "prominence": m.get("prominence", ""),
+            })
+        return results
+
+
 BRAND_MATCHER = TermMatcher(BRANDS)
-TARGET_MATCHER = TermMatcher({label: {"aliases": terms} for label, terms in MONITORING_TARGETS.items()})
+# topics are keyword lists, not brands — plain keyword matching, no brand confidence rules
+TARGET_MATCHER = _LegacyTermMatcher({label: {"aliases": terms} for label, terms in MONITORING_TARGETS.items()})
 
 CATEGORY_RULES = {
     "AI & Tech": ["artificial intelligence", "machine learning", "deep learning", "generative AI",
@@ -2019,6 +2050,7 @@ CREATE INDEX IF NOT EXISTS idx_articles_thash ON articles(title_hash);
 CREATE TABLE IF NOT EXISTS mentions(
   article_id INTEGER, brand TEXT, brand_country TEXT, sector TEXT, aliases_matched TEXT,
   hit_count INTEGER, in_title INTEGER, sentiment_score REAL, sentiment_label TEXT, snippet TEXT,
+  confidence TEXT, match_reasons TEXT, prominence TEXT,
   PRIMARY KEY(article_id, brand));
 CREATE INDEX IF NOT EXISTS idx_mentions_brand ON mentions(brand);
 CREATE TABLE IF NOT EXISTS target_hits(article_id INTEGER, target TEXT, PRIMARY KEY(article_id, target));
@@ -2058,7 +2090,7 @@ ARTICLE_COLS = ["url", "source", "source_country", "tier", "domain", "discovered
                 "author", "language", "published_at", "collected_at", "category", "sentiment_score",
                 "sentiment_label", "keywords", "char_count", "content_hash", "title_hash", "duplicate_of"]
 MENTION_COLS = ["brand", "brand_country", "sector", "aliases_matched", "hit_count", "in_title",
-                "sentiment_score", "sentiment_label", "snippet"]
+                "sentiment_score", "sentiment_label", "snippet", "confidence", "match_reasons", "prominence"]
 
 
 def db_connect(path: str) -> sqlite3.Connection:
@@ -2068,6 +2100,10 @@ def db_connect(path: str) -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(articles)")}
     if cols and "tier" not in cols:                 # database created by an earlier v4 build
         conn.execute("ALTER TABLE articles ADD COLUMN tier TEXT")
+    mcols = {r[1] for r in conn.execute("PRAGMA table_info(mentions)")}
+    for col in ("confidence", "match_reasons", "prominence"):     # added with brand_matcher.py
+        if mcols and col not in mcols:
+            conn.execute(f"ALTER TABLE mentions ADD COLUMN {col} TEXT")
     conn.executescript(SCHEMA)
     if not conn.execute("SELECT 1 FROM meta WHERE key = 'fts_built'").fetchone():
         # First run on a database that predates the full-text index: index what's already there
@@ -2151,7 +2187,44 @@ def fts_phrase(term: str) -> str:
 
 
 def _spec_hash(spec: dict) -> str:
-    return sha1(json.dumps({k: spec.get(k) for k in ("aliases", "context")}, sort_keys=True))
+    return sha1(json.dumps({k: spec.get(k) for k in ("aliases", "context", "exclude", "not_near", "alias_rules")},
+                           sort_keys=True, default=str))
+
+
+def matcher_version() -> str:
+    return _bm.MATCHER_VERSION if _bm else "legacy"
+
+
+def reclassify_archive(conn: sqlite3.Connection, registry: dict, force: bool = False) -> int:
+    """Re-runs brand matching over every stored article when the matching rules change (or force=True),
+    replacing the old mentions — this is what removes past misclassifications, not just new ones."""
+    current = matcher_version()
+    row = conn.execute("SELECT value FROM meta WHERE key = 'matcher_version'").fetchone()
+    if not force and row and row[0] == current:
+        return 0
+    if not conn.execute("SELECT 1 FROM articles LIMIT 1").fetchone():
+        conn.execute("INSERT OR REPLACE INTO meta VALUES ('matcher_version', ?)", (current,))
+        conn.commit()
+        return 0
+    before = conn.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
+    matcher = TermMatcher(registry)
+    conn.execute("DELETE FROM mentions")
+    n = 0
+    for aid, title, summary, text, lang in conn.execute(
+            "SELECT id, title, summary, text, language FROM articles").fetchall():
+        title, text = title or "", text or ""
+        full = f"{title}\n{text}" if text else f"{title}\n{summary or ''}"
+        found = matcher.find(full, title, lang=lang or "und")
+        if found:
+            _insert_mentions(conn, aid, found)
+            n += len(found)
+    for name, spec in registry.items():
+        conn.execute("INSERT OR REPLACE INTO brand_backfill VALUES (?,?,?)", (name, _spec_hash(spec), iso(now_utc())))
+    conn.execute("INSERT OR REPLACE INTO meta VALUES ('matcher_version', ?)", (current,))
+    conn.commit()
+    log.info(f"[Reclassify] brand matching rules {row[0] if row else 'none'} → {current}: "
+             f"{before} old mentions replaced by {n} (difference = misclassifications removed / new matches)")
+    return n
 
 
 def backfill_brand(conn: sqlite3.Connection, name: str, spec: dict) -> int:
@@ -2223,7 +2296,7 @@ def export_csvs(conn: sqlite3.Connection):
     rows = conn.execute("""
         SELECT m.brand, m.brand_country, m.sector, a.published_at, a.source, a.source_country, a.tier, a.language,
                a.title, a.url, m.hit_count, m.in_title, m.sentiment_score, m.sentiment_label, m.snippet,
-               a.duplicate_of
+               a.duplicate_of, m.confidence, m.match_reasons, m.prominence
         FROM mentions m JOIN articles a ON a.id = m.article_id
         WHERE a.collected_at >= ? ORDER BY m.brand, a.published_at DESC""", (since,))
     _write_csv(MENTIONS_EXPORT, rows)
@@ -2479,6 +2552,10 @@ async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBas
     try:
         registry = active_registry(conn)
         use_registry(registry)
+        if _bm is None:
+            log.warning("brand_matcher.py is missing from the repo — using the old brand matcher "
+                        "(misclassification fixes are OFF). Add brand_matcher.py next to scraper.py.")
+        reclassify_archive(conn, registry)
         sync_backfills(conn, registry)
 
         log.info("=" * 60)
