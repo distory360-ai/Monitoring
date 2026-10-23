@@ -70,6 +70,15 @@ jobs:
             python -c "import sqlite3; c = sqlite3.connect('data/mediapulse.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
           fi
 
+      - name: Sync new articles into production Postgres
+        if: always() && steps.crawl.outcome != 'skipped'
+        env:
+          NEWS_DATABASE_URL: ${{ secrets.NEWS_DATABASE_URL }}
+        run: |
+          if [ -f data/mediapulse.db ]; then
+            python sync_postgres.py
+          fi
+
       - name: Commit results
         if: always() && steps.crawl.outcome != 'skipped'
         run: |
