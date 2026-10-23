@@ -6,6 +6,7 @@ import csv
 import datetime as dt
 import gzip
 import hashlib
+import html as htmllib                       # 'html' is used as a local variable name in discover_source
 import json
 import logging
 import os
@@ -16,7 +17,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from typing import Iterable, Optional
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
 import feedparser
@@ -46,6 +47,12 @@ PENDING_MAX_AGE_DAYS = 3
 SKIP_AFTER_FAILURES = 3        
 SKIP_DAYS = 7                  
 MAX_SITEMAPS = int(os.getenv("MP_MAX_SITEMAPS", "6"))
+ROBOTS_CACHE_DAYS = 30          # RFC 9309 lets a crawler reuse its last good robots.txt while the server errors
+UNDATED_FALLBACK = int(os.getenv("MP_UNDATED_FALLBACK", "30"))   # undated sitemap URLs tried when nothing else works
+FALLBACK_SITEMAPS = ["/sitemap.xml", "/sitemap_index.xml", "/news-sitemap.xml", "/wp-sitemap.xml",
+                     "/post-sitemap.xml"]
+FALLBACK_FEEDS = ["feed/", "rss", "rss.xml", "feed.xml", "atom.xml", "?feed=rss2",
+                  "index.php?format=feed&type=rss"]          # WordPress, generic, Joomla
 CONCURRENCY = int(os.getenv("MP_CONCURRENCY", "24"))
 DOMAIN_DELAY = float(os.getenv("MP_DOMAIN_DELAY", "2.0"))
 REQUEST_TIMEOUT = float(os.getenv("MP_TIMEOUT", "20"))
@@ -112,6 +119,14 @@ for _noisy in ("trafilatura", "htmldate", "courlan", "justext", "readability"):
 # searched: every article is full-text indexed, so any brand can be queried with
 # `python ingest.py "Any Brand"` — and promoted to tracking with --track, which
 # backfills its mentions over everything already collected.
+#
+# SOURCES — optional per-outlet keys
+#   feeds / sitemaps : explicit RSS/Atom feeds or sitemap URLs (skip auto-discovery)
+#   hosts            : extra hostnames whose articles belong to this outlet
+#   lookback_hours   : wider window for weekly / slow outlets (default LOOKBACK_HOURS)
+#   delay            : seconds between requests to this site
+#   discovery_timeout: seconds allowed for discovery (partial results are kept on timeout)
+#   crawl            : False = never crawl; still tagged when GDELT surfaces its articles
 
 # ─────────────────────────────────────────────────────────────
 # TOPIC / CLIENT MONITORING (topic trackers, unchanged intent,
@@ -527,8 +542,9 @@ SOURCES = [
     {"name": "The Africa Report", "url": "https://www.theafricareport.com", "country": "PAN", "lang": "en",
      "tier": "trade"},
     {"name": "Zawya", "url": "https://www.zawya.com/en", "country": "PAN", "lang": "en", "tier": "trade"},
+    # weekly edition: a 48h window is usually empty
     {"name": "University World News", "url": "https://www.universityworldnews.com", "country": "PAN", "lang": "en",
-     "tier": "trade"},
+     "tier": "trade", "lookback_hours": 192},
     {"name": "African Travel Times", "url": "https://africantraveltimes.com", "country": "PAN", "lang": "en",
      "tier": "trade"},
     {"name": "Space Watch Africa", "url": "https://spacewatchafrica.com", "country": "PAN", "lang": "en",
@@ -715,7 +731,8 @@ SOURCES = [
     {"name": "The Herald (Zimbabwe)", "url": "https://www.herald.co.zw", "country": "ZW", "lang": "en", "tier": "national"},
     {"name": "The Chronicle (Zimbabwe)", "url": "https://www.chronicle.co.zw", "country": "ZW", "lang": "en",
      "tier": "national"},
-    {"name": "NewsDay Zimbabwe", "url": "https://www.newsday.co.zw", "country": "ZW", "lang": "en", "tier": "national"},
+    {"name": "NewsDay Zimbabwe", "url": "https://www.newsday.co.zw", "country": "ZW", "lang": "en", "tier": "national",
+     "crawl": False},  # HTTP 403 on every request; still tagged when GDELT finds it
     {"name": "ZimLive", "url": "https://www.zimlive.com", "country": "ZW", "lang": "en", "tier": "digital"},
     {"name": "NewZimbabwe", "url": "https://www.newzimbabwe.com", "country": "ZW", "lang": "en", "tier": "digital"},
     {"name": "Bulawayo24", "url": "https://bulawayo24.com", "country": "ZW", "lang": "en", "tier": "digital"},
@@ -732,7 +749,7 @@ SOURCES = [
     {"name": "Namibian Sun", "url": "https://www.namibiansun.com", "country": "NA", "lang": "en", "tier": "national"},
     {"name": "Mmegi", "url": "https://www.mmegi.bw", "country": "BW", "lang": "en", "tier": "national"},
     {"name": "Sunday Standard (Botswana)", "url": "https://www.sundaystandard.info", "country": "BW", "lang": "en",
-     "tier": "national"},
+     "tier": "national", "lookback_hours": 168},     # weekly paper
     {"name": "Lesotho Times", "url": "https://lestimes.com", "country": "LS", "lang": "en", "tier": "national"},
     {"name": "Times of Eswatini", "url": "https://times.co.sz", "country": "SZ", "lang": "en", "tier": "national"},
     # ── North Africa ─────────────────────────────────────────
@@ -760,7 +777,7 @@ SOURCES = [
     {"name": "CNBC Africa", "url": "https://www.cnbcafrica.com", "country": "PAN", "lang": "en", "tier": "national"},
     {"name": "African Business", "url": "https://african.business", "country": "PAN", "lang": "en", "tier": "trade"},
     {"name": "How We Made It In Africa", "url": "https://www.howwemadeitinafrica.com", "country": "PAN", "lang": "en",
-     "tier": "trade"},
+     "tier": "trade", "lookback_hours": 168},        # a few articles a week
     {"name": "Further Africa", "url": "https://furtherafrica.com", "country": "PAN", "lang": "en", "tier": "trade"},
     {"name": "IT News Africa", "url": "https://www.itnewsafrica.com", "country": "PAN", "lang": "en", "tier": "trade"},
     {"name": "TechAfrica News", "url": "https://techafricanews.com", "country": "PAN", "lang": "en", "tier": "trade"},
@@ -802,7 +819,9 @@ SOURCES = [
 
     # ══ ADDED FROM MEDIA LIST 2026 (DC) ══════════════════════════════════════
     # ── Requested additions ──────────────────────────────────
-    {"name": "CGTN Africa", "url": "https://africa.cgtn.com", "country": "PAN", "lang": "en", "tier": "international"},
+    # articles are published on newsaf.cgtn.com, not on africa.cgtn.com itself
+    {"name": "CGTN Africa", "url": "https://africa.cgtn.com", "country": "PAN", "lang": "en", "tier": "international",
+     "hosts": ["newsaf.cgtn.com"]},
     {"name": "CGTN", "url": "https://www.cgtn.com", "country": "CN", "lang": "en", "tier": "international",
      "hosts": ["news.cgtn.com"]},
     {"name": "RBA (Rwanda Broadcasting Agency)", "url": "https://www.rba.co.rw", "country": "RW", "lang": "en",
@@ -841,14 +860,17 @@ SOURCES = [
     {"name": "Midweek Sun", "url": "https://www.midweeksun.co.bw", "country": "BW", "lang": "en", "tier": "national"},
     {"name": "Republikein", "url": "https://www.republikein.com.na", "country": "NA", "lang": "af", "tier": "national"},
     {"name": "Oxpeckers", "url": "https://oxpeckers.org", "country": "ZA", "lang": "en", "tier": "trade"},
-    {"name": "The Continent", "url": "https://www.thecontinent.org", "country": "ZA", "lang": "en", "tier": "trade"},
+    {"name": "The Continent", "url": "https://www.thecontinent.org", "country": "ZA", "lang": "en", "tier": "trade",
+     "lookback_hours": 192},      # weekly (Saturday) edition
     {"name": "Rádio Moçambique", "url": "https://www.rm.co.mz", "country": "MZ", "lang": "pt", "tier": "national"},
     # ── Pan-African / international / specialist ────────────
     {"name": "TRT Afrika", "url": "https://www.trtafrika.com", "country": "PAN", "lang": "en",
      "tier": "international"},
     {"name": "Al Jazeera", "url": "https://www.aljazeera.com", "country": "QA", "lang": "en", "tier": "international",
      "feeds": ["https://www.aljazeera.com/xml/rss/all.xml"]},
-    {"name": "AP News", "url": "https://apnews.com", "country": "US", "lang": "en", "tier": "international"},
+    # AP News and Devex return HTTP 403 to crawlers: not crawled, tagged when GDELT surfaces them
+    {"name": "AP News", "url": "https://apnews.com", "country": "US", "lang": "en", "tier": "international",
+     "crawl": False},
     {"name": "DW (English)", "url": "https://www.dw.com/en", "country": "DE", "lang": "en", "tier": "international",
      "feeds": ["https://rss.dw.com/rdf/rss-en-africa"]},
     {"name": "DW Afrique", "url": "https://www.dw.com/fr", "country": "DE", "lang": "fr", "tier": "international"},
@@ -856,7 +878,8 @@ SOURCES = [
     {"name": "Climate Home News", "url": "https://www.climatechangenews.com", "country": "GB", "lang": "en",
      "tier": "trade"},
     {"name": "Mongabay", "url": "https://news.mongabay.com", "country": "US", "lang": "en", "tier": "trade"},
-    {"name": "Devex", "url": "https://www.devex.com", "country": "US", "lang": "en", "tier": "trade"},
+    {"name": "Devex", "url": "https://www.devex.com", "country": "US", "lang": "en", "tier": "trade",
+     "crawl": False},
     {"name": "Drilled", "url": "https://drilled.media", "country": "US", "lang": "en", "tier": "trade"},
     {"name": "FAIR (Forum for African Investigative Reporters)", "url": "https://fairreporters.net", "country": "PAN",
      "lang": "en", "tier": "trade"},
@@ -1205,6 +1228,8 @@ def _index_sources(sources: list) -> tuple[dict, dict]:
     for s in sources:
         u = urlparse(s["url"])
         by_host.setdefault(host_key(u.netloc), []).append((u.path.rstrip("/"), s))
+        for h in s.get("hosts", []):                             # extra hosts belong to the outlet too
+            by_host.setdefault(host_key(h), []).append(("", s))
         by_name.setdefault(s["name"].lower(), s)
     for entries in by_host.values():
         entries.sort(key=lambda e: len(e[0]), reverse=True)      # longest path prefix wins
@@ -1258,6 +1283,7 @@ class Candidate:
     tier: str = ""
     fetch: bool = True        # False = keep title/summary only (e.g. Google News redirect links)
     queued_at: str = ""       # when the URL first went to the pending queue
+    lookback_hours: int = 0   # per-outlet lookback (weekly/slow outlets); 0 = global LOOKBACK_HOURS
 
 
 @dataclass
@@ -1276,7 +1302,7 @@ def is_transient(reason: str) -> bool:
 # POLITE FETCHER — robots.txt, crawl-delay, per-host pacing
 # ─────────────────────────────────────────────
 class Fetcher:
-    def __init__(self, client: httpx.AsyncClient):
+    def __init__(self, client: httpx.AsyncClient, robots_cache: Optional[dict] = None):
         self.client = client
         self.sem = asyncio.Semaphore(CONCURRENCY)
         self._turn_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -1285,6 +1311,7 @@ class Fetcher:
         self._robots_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.robots_note: dict[str, str] = {}
         self.host_overrides: dict[str, float] = {}     # per-source "delay" from SOURCES
+        self.robots_cache: dict = robots_cache if robots_cache is not None else {}   # host -> (body, iso time)
         self.requests = 0
 
     def host_delay(self, url: str) -> float:
@@ -1303,6 +1330,20 @@ class Fetcher:
         async with self.sem:
             self.requests += 1
             return await self.client.get(url, follow_redirects=True, headers=headers)
+
+    def _use_cached_robots(self, host: str, rp: RobotFileParser, problem: str) -> bool:
+        """Server error / unreachable: reuse the last robots.txt we read successfully (RFC 9309 §2.4)
+        instead of treating the whole site as off-limits."""
+        hit = self.robots_cache.get(host)
+        if not hit:
+            return False
+        body, when = hit
+        d = parse_date(when)
+        if not d or now_utc() - d > dt.timedelta(days=ROBOTS_CACHE_DAYS):
+            return False
+        rp.parse((body or "").splitlines())
+        self.robots_note[host] = f"{problem}; using cached robots.txt from {when[:10]}"
+        return True
 
     async def robots(self, url: str) -> RobotFileParser:
         p = urlparse(url)
@@ -1328,22 +1369,29 @@ class Fetcher:
                         continue
                     break
                 if r.status_code >= 500 or r.status_code == 429:
-                    rp.disallow_all = True          # RFC 9309: server error => assume full disallow
-                    self.robots_note[host] = f"robots.txt HTTP {r.status_code} (treated as disallow-all)"
+                    problem = f"robots.txt HTTP {r.status_code}"
+                    if not self._use_cached_robots(host, rp, problem):
+                        rp.disallow_all = True      # RFC 9309: server error => assume full disallow
+                        self.robots_note[host] = f"{problem} (treated as disallow-all)"
                 elif r.status_code >= 400:
                     rp.parse([])                    # RFC 9309: 4xx => no restrictions
+                    if r.status_code in (404, 410):
+                        self.robots_cache[host] = ("", iso(now_utc()))
                     self.robots_note[host] = (f"robots.txt HTTP {r.status_code} — site may be blocking bots"
                                               if r.status_code in (401, 403) else "no robots.txt")
                 else:
                     rp.parse(r.text.splitlines())
+                    self.robots_cache[host] = (r.text, iso(now_utc()))
                     self.robots_note[host] = "robots.txt ok"
             except httpx.TooManyRedirects:          # RFC 9309: >5 redirects => treat as unavailable (no rules)
                 rp.parse([])
                 self.robots_note[host] = "robots.txt redirect loop (treated as no robots.txt)"
-            except Exception as e:                  # unreachable host: be conservative
+            except Exception as e:                  # unreachable host: cached copy, else be conservative
                 log.debug(f"[robots] {host}: {e}")
-                rp.disallow_all = True
-                self.robots_note[host] = f"robots.txt unreachable ({type(e).__name__}) — site down or blocking GitHub"
+                problem = f"robots.txt unreachable ({type(e).__name__})"
+                if not self._use_cached_robots(host, rp, problem):
+                    rp.disallow_all = True
+                    self.robots_note[host] = f"{problem} — site down or blocking GitHub"
             self._robots[host] = rp
             return rp
 
@@ -1377,18 +1425,48 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+_SM_ENTRY = re.compile(rb"<(?:[\w-]+:)?(url|sitemap)\b[^>]*>(.*?)</(?:[\w-]+:)?\1\s*>", re.S | re.I)
+
+
+def _sm_field(block: bytes, name: bytes) -> str:
+    m = re.search(rb"<(?:[\w-]+:)?" + name + rb"\b[^>]*>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*</",
+                  block, re.S | re.I)
+    return htmllib.unescape(m.group(1).decode("utf-8", "replace")).strip() if m else ""
+
+
+def _parse_sitemap_loose(content: bytes) -> tuple[list, list]:
+    """Fallback for sitemaps a strict XML parser rejects (unescaped '&', stray bytes, junk before
+    the XML declaration) and for plain-text sitemaps (one URL per line, allowed by the protocol)."""
+    if b"<" not in content[:2000]:
+        urls = [ln.strip().decode("utf-8", "replace") for ln in content.splitlines()
+                if ln.strip().startswith((b"http://", b"https://"))]
+        return [], [(u, None) for u in urls]
+    items, kinds = [], set()
+    for m in _SM_ENTRY.finditer(content):
+        block = m.group(2)
+        loc = _sm_field(block, b"loc")
+        if loc:
+            d = parse_date(_sm_field(block, b"publication_date")) or parse_date(_sm_field(block, b"lastmod"))
+            items.append((loc, d))
+            kinds.add(m.group(1).lower())
+    if b"sitemapindex" in content[:5000].lower() or kinds == {b"sitemap"}:
+        return items, []
+    return [], items
+
+
 def parse_sitemap(content: bytes) -> tuple[list, list]:
     """Returns (child_sitemaps, article_urls) as lists of (url, datetime|None).
-    Handles sitemap indexes, plain sitemaps, Google News sitemaps and .gz."""
+    Handles sitemap indexes, plain/news/text sitemaps, .gz, BOMs and malformed XML."""
     if content[:2] == b"\x1f\x8b":
         try:
             content = gzip.decompress(content)
         except OSError:
             return [], []
+    content = content.lstrip(b"\xef\xbb\xbf \t\r\n")
     try:
-        root = ET.fromstring(content.lstrip())
+        root = ET.fromstring(content)
     except ET.ParseError:
-        return [], []
+        return _parse_sitemap_loose(content)
     items = []
     for node in root:
         loc, lastmod, pubdate = None, None, None
@@ -1442,43 +1520,95 @@ _EXCLUDE_PATH = re.compile(
 )
 _MEDIA_EXT = re.compile(r"\.(jpg|jpeg|png|gif|webp|pdf|xml|mp3|mp4|css|js)$", re.I)
 _ARTICLE_HINT = re.compile(r"(/20\d{2}/\d{1,2}/)|(\d{5,})|([a-z0-9]+(?:-[a-z0-9]+){3,})", re.I)
+_ID_QUERY = re.compile(r"(?:^|&)(?:p|id|story|article|articleid|art_id|nid|newsid|news_id|itemid|item|aid|sid|"
+                       r"post|postid)=[\w-]*\d{3,}", re.I)
+_DOC_EXT = re.compile(r"\.(s?html?|php|aspx?)$", re.I)
 
 
-def looks_like_article(path: str) -> bool:
-    """Section/listing pages (/news/, /regions, /composition/hp-news-4/) are not articles.
-    Articles have a long slug, a numeric id, a dated path, or an id-like last segment."""
-    segs = [x for x in path.split("/") if x]
-    if not segs:
+def looks_like_article(path: str, query: str = "") -> bool:
+    """Section/listing pages (/news/, /regions) are not articles. Articles have a long slug, a numeric
+    id, a dated path, an id-like last segment, or an id in the query string (?p=123, ?story=2026...).
+    Every segment is checked, not just the last (/news/long-article-slug/news), and percent-encoded
+    Ge'ez/Arabic slugs are decoded first."""
+    if query and _ID_QUERY.search(query):
+        return True
+    raw = [x for x in path.split("/") if x]
+    if not raw:
         return False
-    last = segs[-1]
-    if re.search(r"/20\d{2}/\d{1,2}/", path) or re.search(r"\d{5,}", last) or last.count("-") >= 3:
+    if re.search(r"/20\d{2}/\d{1,2}/", path):
         return True
-    if "%" in last and len(last) > 40:                       # percent-encoded Arabic/Ge'ez slugs
+    for seg in (unquote(x) for x in raw):
+        stem = _DOC_EXT.sub("", seg)
+        if re.search(r"\d{5,}", stem) or stem.count("-") >= 3:
+            return True
+        if is_nonlatin(stem) and len(stem) >= 12:
+            return True
+    last = raw[-1]
+    if "%" in last and len(last) > 40:                       # percent-encoded slugs in other scripts
         return True
-    if re.search(r"\.(s?html?|php|aspx?)$", last, re.I) and len(last) > 15:
+    if _DOC_EXT.search(last) and len(last) > 15:
         return True
     return len(last) >= 10 and "-" not in last and bool(re.search(r"\d", last)) and bool(re.search(r"[a-z]", last, re.I))
+
+
+# URLs inside inline scripts / JSON (Next.js, Nuxt, Angular sites ship their links this way)
+_EMBEDDED_URL = re.compile(r"""["'](https?://[^"'\s<>\\]{8,300}|/[^/"'\s<>\\][^"'\s<>\\]{7,300})["']""")
 
 
 def find_article_links(html: str, base: str) -> list[str]:
     if not html:
         return []
+    out = []
     try:
         doc = lxml.html.fromstring(html)
     except Exception:
-        return []
-    out = []
-    for a in doc.xpath("//a[@href]"):
-        href = urljoin(base, a.get("href"))
-        if _ARTICLE_HINT.search(urlparse(href).path):
-            out.append(href)
-    return out
+        doc = None
+    if doc is not None:
+        for a in doc.xpath("//a[@href]"):
+            href = urljoin(base, (a.get("href") or "").strip())
+            p = urlparse(href)
+            if looks_like_article(p.path, p.query):
+                out.append(href)
+    if len(out) < 5:                     # script-rendered homepage: look inside its inline data
+        for m in _EMBEDDED_URL.finditer(html.replace("\\/", "/")):
+            href = urljoin(base, m.group(1))
+            p = urlparse(href)
+            if p.scheme in ("http", "https") and looks_like_article(p.path, p.query):
+                out.append(href)
+    return list(dict.fromkeys(out))
+
+
+_CHALLENGE = re.compile(
+    r"cf-chl|challenge-platform|cf-browser-verification|sgcaptcha|captcha-delivery|ddos-guard|_Incapsula_Resource|"
+    r"<title>\s*(?:Just a moment|Attention Required|Access denied|Checking your browser|Verifying you are human)",
+    re.I)
+_JS_SHELL = re.compile(r"__NEXT_DATA__|__NUXT__|<div id=\"(?:root|app|__next|__nuxt)\"|ng-version=|data-reactroot", re.I)
+
+
+def page_problem(html: str) -> str:
+    """Name the real reason a 200 response has no links, instead of 'homepage_has_no_article_links'."""
+    if not html:
+        return ""
+    if _CHALLENGE.search(html[:30000]):
+        return "bot-challenge page (HTTP 200 but not the real site — blocked by a firewall/CDN)"
+    if _JS_SHELL.search(html) and len(re.findall(r"<a\s", html, re.I)) < 10:
+        return "JavaScript-rendered homepage (links are built in the browser)"
+    return ""
+
+
+def _recency_key(item: tuple) -> tuple:
+    """Undated sitemap URL ordering: largest numeric id/date first, then later position in the file."""
+    url, idx = item
+    nums = [int(n) for n in re.findall(r"\d{4,12}", url)]
+    return (max(nums) if nums else -1, idx)
 
 
 # ─────────────────────────────────────────────
 # DISCOVERY: OWN CRAWL OF EACH OUTLET
 # ─────────────────────────────────────────────
-async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Optional[dict] = None) -> list[Candidate]:
+async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Optional[dict] = None,
+                          found: Optional[dict] = None) -> list[Candidate]:
+    """`found` may be passed in by the caller so that a timeout still leaves usable results."""
     base = src["url"].rstrip("/") + "/"
     bp = urlparse(base)
     root = f"{bp.scheme}://{bp.netloc}"
@@ -1486,17 +1616,24 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
     src_host = host_key(bp.netloc)
     hosts = {src_host} | {host_key(h) for h in src.get("hosts", [])}
     domains = {reg_domain(src_host)} | {reg_domain(h) for h in src.get("hosts", [])}
-    found: dict[str, Candidate] = {}
+    lookback = int(src.get("lookback_hours", 0) or 0)
+    if lookback:
+        cutoff = min(cutoff, now_utc() - dt.timedelta(hours=lookback))
+    found = {} if found is None else found
     dropped = Counter()
     other_hosts = Counter()
 
     # Homepage first: if the site has moved or redirects to another host, follow it
     home = await f.get(base)
+    html = ""
     if home.resp is not None:
         final_host = host_key(urlparse(str(home.resp.url)).netloc)
         if final_host and final_host not in hosts:
             hosts.add(final_host)
             domains.add(reg_domain(final_host))
+        if "html" in home.resp.headers.get("content-type", "").lower():
+            html = home.resp.text
+    problem = page_problem(html)
 
     def add(url: str, published=None, via: str = "", title: str = "", summary: str = ""):
         cu = canonicalize(url)
@@ -1504,22 +1641,24 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
             return
         up = urlparse(cu)
         h = host_key(up.netloc)
-        # Sitemaps and feeds are the site's own declarations: accept its subdomains and sister domains
-        # (amp./m./en. hosts, a renamed domain). Homepage links must be on the site itself.
-        if h not in hosts and not (via in ("rss", "sitemap") and reg_domain(h) in domains):
+        trusted = via in ("rss", "wp-json")          # the site itself says these are posts
+        # Sitemaps, feeds and the WP API are the site's own declarations: accept its subdomains and sister
+        # domains (amp./m./en. hosts, a renamed domain). Homepage links must be on the site itself.
+        if h not in hosts and not ((trusted or via == "sitemap") and reg_domain(h) in domains):
             dropped["other_site"] += 1
             other_hosts[h] += 1
             return
-        if prefix and via != "rss" and not up.path.startswith(prefix):
+        if prefix and not trusted and not up.path.startswith(prefix):
             dropped["outside_section"] += 1
             return
-        if up.path in ("", "/") or _MEDIA_EXT.search(up.path):
+        # "/?p=123" is a WordPress article, not the homepage
+        if (up.path in ("", "/") and not up.query) or _MEDIA_EXT.search(up.path):
             dropped["tag/video/page_url"] += 1
             return
-        if via != "rss" and _EXCLUDE_PATH.search(up.path) and not looks_like_article(up.path):
+        if not trusted and _EXCLUDE_PATH.search(up.path) and not looks_like_article(up.path, up.query):
             dropped["tag/video/page_url"] += 1
             return
-        if via != "rss" and not looks_like_article(up.path):
+        if not trusted and not looks_like_article(up.path, up.query):
             dropped["not_article"] += 1
             return
         if published and published < cutoff:
@@ -1532,20 +1671,25 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
             return
         found[cu] = Candidate(url=cu, source=src["name"], country=src.get("country", ""),
                               lang=src.get("lang", ""), via=via, published=published,
-                              tier=src.get("tier", "national"),
+                              tier=src.get("tier", "national"), lookback_hours=lookback,
                               title_hint=clean_text(title), summary_hint=clean_text(summary)[:500])
 
-    # 1) Sitemaps listed in robots.txt (news sitemaps first), fallback /sitemap.xml
+    # 1) Sitemaps: configured, else listed in robots.txt (news sitemaps first), else guess common locations
     rp = await f.robots(root + "/")
+    probing = False
     if "sitemaps" in src:
         sitemaps = list(src["sitemaps"])
     elif prefix:
         sitemaps = []        # a section of a big site (bbc.com/hausa): its host-wide sitemaps are slow and off-topic
     else:
-        sitemaps = list(rp.site_maps() or []) or [root + "/sitemap.xml"]
-    queue = deque(_prioritise_sitemaps([(s, None) for s in sitemaps]))
+        sitemaps = list(rp.site_maps() or [])
+        if not sitemaps:
+            sitemaps, probing = [root + p for p in FALLBACK_SITEMAPS], True
+    queue = deque(sitemaps if probing else _prioritise_sitemaps([(s, None) for s in sitemaps]))
+    probe_set = set(sitemaps) if probing else set()
     visited: set[str] = set()
     sm_notes = Counter()
+    undated: list = []
     while queue and len(visited) < MAX_SITEMAPS:
         sm = queue.popleft()
         if sm in visited:
@@ -1558,40 +1702,81 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
         sm_notes["ok"] += 1
         children, urls = parse_sitemap(res.resp.content)
         if not children and not urls:
-            dropped["sitemap_empty_or_unreadable"] += 1
+            bot = page_problem(res.resp.text[:30000]).startswith("bot")
+            dropped["sitemap_bot_challenge" if bot else "sitemap_empty_or_unreadable"] += 1
+            continue
+        if probe_set:                                 # a guessed location worked: stop guessing
+            queue = deque(u for u in queue if u not in probe_set)
+            probe_set = set()
         fresh_children = [(u, d) for u, d in children if d is None or d >= cutoff]
         if children and not fresh_children:
+            # index lastmod dates are often never updated: still read the newest child or two
             dropped["all_child_sitemaps_older_than_lookback"] += 1
+            fresh_children = [(u, None) for u in _prioritise_sitemaps(children)[:2]]
         queue.extend(_prioritise_sitemaps(fresh_children))
         news_like = "news" in sm.lower()
-        for u, d in urls:
-            if d is None and not news_like:      # undated URLs in a general sitemap = archive noise
-                dropped["undated_in_sitemap"] += 1
+        for i, (u, d) in enumerate(urls):
+            if d is None and not news_like:      # undated URLs in a general sitemap: only a fallback
+                undated.append((u, i))
                 continue
             add(u, d, "sitemap")
+    if undated:
+        if len(found) < 15:
+            ranked = sorted(undated, key=_recency_key, reverse=True)[:UNDATED_FALLBACK]
+            for u, _ in ranked:
+                add(u, None, "sitemap")
+            dropped["undated_in_sitemap"] += len(undated) - len(ranked)
+        else:
+            dropped["undated_in_sitemap"] += len(undated)
 
-    # 2) RSS / Atom: configured + auto-discovered from homepage <link rel=alternate>
+    # 2) RSS / Atom: configured + auto-discovered from homepage; if none works, probe common feed paths
     feed_notes = Counter()
-    html = ""
-    if home.resp and "html" in home.resp.headers.get("content-type", "").lower():
-        html = home.resp.text
-    feeds = list(src.get("feeds", [])) + find_feed_links(html, base)
-    if not feeds:
-        feeds = [urljoin(base, "feed/"), urljoin(base, "rss")]
-    for feed_url in list(dict.fromkeys(feeds))[:4]:
+
+    async def read_feed(feed_url: str) -> int:
         res = await f.get(feed_url)
         if not res.resp:
             feed_notes[res.reason if res.reason != "gone" else f"HTTP {res.status}"] += 1
-            continue
+            return 0
         parsed = feedparser.parse(res.resp.content)
-        feed_notes["ok" if parsed.entries else "empty"] += 1
+        if not parsed.entries:
+            is_html = "html" in res.resp.headers.get("content-type", "").lower()
+            feed_notes["not_a_feed (html page)" if is_html else "empty"] += 1
+            return 0
+        feed_notes["ok"] += 1
         for e in parsed.entries:
             link = e.get("link")
             if link:
                 add(link, parse_date(e.get("published") or e.get("updated")), "rss",
                     e.get("title", ""), e.get("summary", ""))
+        return len(parsed.entries)
 
-    # 3) Homepage links — last resort when a site has no usable sitemap or feed
+    feeds = list(dict.fromkeys(list(src.get("feeds", [])) + find_feed_links(html, base)))
+    got = 0
+    for feed_url in feeds[:4]:
+        got += await read_feed(feed_url)
+    if not got and len(found) < 15:
+        for path in FALLBACK_FEEDS:
+            u = urljoin(base, path)
+            if u not in feeds and await read_feed(u):
+                break
+
+    # 3) WordPress REST API: many African outlets run WordPress with broken feeds/sitemaps
+    if len(found) < 15 and not prefix:
+        res = await f.get(root + "/wp-json/wp/v2/posts?per_page=50&_fields=link,date_gmt,title")
+        if res.resp is not None and "json" in res.resp.headers.get("content-type", "").lower():
+            try:
+                posts = res.resp.json()
+            except ValueError:
+                posts = []
+            if isinstance(posts, list):
+                feed_notes["wp-json ok" if posts else "wp-json empty"] += 1
+                for p in posts:
+                    if isinstance(p, dict) and p.get("link"):
+                        t = p.get("title")
+                        t = t.get("rendered", "") if isinstance(t, dict) else str(t or "")
+                        add(p["link"], parse_date(p.get("date_gmt")), "wp-json", htmllib.unescape(t))
+
+    # 4) Homepage links — last resort (anchors, or URLs embedded in inline scripts on JS-built pages)
     if len(found) < 15:
         links = find_article_links(html, base)
         if html and not links:
@@ -1605,8 +1790,9 @@ async def discover_source(f: Fetcher, src: dict, cutoff: dt.datetime, diag: Opti
     if cands:
         log.info(f"[Discover] {src['name']}: {len(cands)} candidates {dict(vias)}")
     else:
-        home_note = ("ok" if home.resp else "blocked by robots.txt (site disallows crawlers)" if home.reason == "robots"
-                     else (home.reason if home.reason != "gone" else f"HTTP {home.status}"))
+        home_note = problem or ("ok" if home.resp else "blocked by robots.txt (site disallows crawlers)"
+                                if home.reason == "robots" else (home.reason if home.reason != "gone"
+                                                                 else f"HTTP {home.status}"))
         if other_hosts:
             top = ", ".join(f"{h} ×{n}" for h, n in other_hosts.most_common(2))
             dropped["other_site"] = f"{dropped['other_site']} (mostly {top})"
@@ -2064,6 +2250,8 @@ def ner_orgs(text: str, lang: str = "en") -> list[str]:
 
 def build_record(status: str, c: Candidate, meta: Optional[dict], final_url: str, cutoff: dt.datetime):
     """Returns (record, mentions, targets, orgs) or a skip reason string."""
+    if c.lookback_hours:                       # weekly / slow outlets get their own, wider window
+        cutoff = min(cutoff, now_utc() - dt.timedelta(hours=c.lookback_hours))
     if status in ("ok", "meta_only") and meta:
         title = clean_text(meta.get("title") or c.title_hint)
         text = clean_text(meta.get("text") or meta.get("raw_text") or "")
@@ -2148,6 +2336,8 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS pending(url TEXT PRIMARY KEY, data TEXT, added_at TEXT);
 -- Outlets that keep blocking us are rested for a week instead of being retried every run
 CREATE TABLE IF NOT EXISTS source_health(name TEXT PRIMARY KEY, fails INTEGER, last_reason TEXT, skip_until TEXT);
+-- Last good robots.txt per host, reused while a site's robots.txt errors (RFC 9309)
+CREATE TABLE IF NOT EXISTS robots_cache(host TEXT PRIMARY KEY, body TEXT, fetched_at TEXT);
 
 -- Full-text index over every stored article: this is what makes ANY brand searchable,
 -- including ones nobody listed when the article was collected.
@@ -2441,6 +2631,16 @@ def save_pending(conn: sqlite3.Connection, cands: list[Candidate]):
     conn.commit()
 
 
+def load_robots_cache(conn: sqlite3.Connection) -> dict:
+    return {h: (b, t) for h, b, t in conn.execute("SELECT host, body, fetched_at FROM robots_cache")}
+
+
+def save_robots_cache(conn: sqlite3.Connection, cache: dict):
+    conn.executemany("INSERT OR REPLACE INTO robots_cache VALUES (?,?,?)",
+                     [(h, b, t) for h, (b, t) in cache.items()])
+    conn.commit()
+
+
 async def process_candidates(conn: sqlite3.Connection, f: Fetcher, cands: list[Candidate],
                              cutoff: dt.datetime, stats: Counter, deadline: Optional[float] = None) -> Counter:
     """Dedupe -> skip already-seen -> fetch -> extract -> analyse -> store.
@@ -2550,7 +2750,7 @@ async def process_candidates(conn: sqlite3.Connection, f: Fetcher, cands: list[C
     return stats
 
 
-_HARD_FAIL = ("HTTP 403", "unreachable", "disallows crawlers", "homepage: HTTP 404", "HTTP 401")
+_HARD_FAIL = ("HTTP 403", "unreachable", "disallows crawlers", "homepage: HTTP 404", "HTTP 401", "bot-challenge")
 
 
 def sources_to_skip(conn: sqlite3.Connection) -> dict:
@@ -2578,17 +2778,28 @@ def update_source_health(conn: sqlite3.Connection, crawled: list, diag: dict):
 async def _discover_all(f: Fetcher, sources: list, cutoff: dt.datetime, registry: dict,
                         use_indexes: bool, stats: Counter, diag: dict) -> list[Candidate]:
     """All outlets and the global indexes in parallel, each outlet with its own timeout and the
-    whole stage with a budget; whatever has finished when the budget ends is used."""
+    whole stage with a budget. Whatever has been found when a timeout or the budget ends is used,
+    including the partial results of outlets that did not finish."""
     disc_deadline = time.monotonic() + DISCOVERY_BUDGET_MIN * 60
+    partials: dict[str, dict] = {}
+
+    def _partial(name: str) -> list[Candidate]:
+        found = partials.get(name) or {}
+        return sorted(found.values(), key=lambda c: c.published or EPOCH, reverse=True)[:MAX_URLS_PER_SOURCE]
 
     async def one(src):
+        limit = float(src.get("discovery_timeout", SOURCE_DISCOVERY_TIMEOUT))
+        partials[src["name"]] = found = {}
         try:
-            limit = float(src.get("discovery_timeout", SOURCE_DISCOVERY_TIMEOUT))
-            return await asyncio.wait_for(discover_source(f, src, cutoff, diag), limit)
+            return await asyncio.wait_for(discover_source(f, src, cutoff, diag, found), limit)
         except asyncio.TimeoutError:
-            diag[src["name"]] = f"discovery timed out after {limit:.0f}s (slow site)"
-            log.info(f"[Discover] {src['name']}: timed out")
-            return []
+            kept = _partial(src["name"])
+            if kept:
+                log.info(f"[Discover] {src['name']}: timed out after {limit:.0f}s — kept {len(kept)} candidates")
+            else:
+                diag[src["name"]] = f"discovery timed out after {limit:.0f}s (slow site)"
+                log.info(f"[Discover] {src['name']}: timed out")
+            return kept
 
     tasks = {asyncio.create_task(one(s_)): s_["name"] for s_ in sources}
     if use_indexes:
@@ -2600,12 +2811,16 @@ async def _discover_all(f: Fetcher, sources: list, cutoff: dt.datetime, registry
         if NEWS_API_KEY:
             tasks[asyncio.create_task(discover_newsapi(f, cutoff))] = "NewsAPI"
     done, not_done = await asyncio.wait(tasks, timeout=max(1.0, disc_deadline - time.monotonic()))
+    cands: list[Candidate] = []
     for t in not_done:
         t.cancel()
-        diag.setdefault(tasks[t], "not finished within the discovery budget")
+        kept = _partial(tasks[t])
+        if kept:
+            cands.extend(kept)
+        else:
+            diag.setdefault(tasks[t], "not finished within the discovery budget")
     if not_done:
         log.warning(f"[Stage 1] discovery budget reached; unfinished: {', '.join(tasks[t] for t in not_done)}")
-    cands: list[Candidate] = []
     for t in done:
         if t.exception():
             log.error(f"[Discover] {tasks[t]} failed: {t.exception()!r}")
@@ -2651,14 +2866,16 @@ async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBas
             log.info(f"[Stage 0] resting {len(skipped)} outlets that blocked us {SKIP_AFTER_FAILURES} runs in a row")
 
         async with make_client(transport) as client:
-            f = Fetcher(client)
+            f = Fetcher(client, load_robots_cache(conn))
             for s_ in SOURCES:
                 if s_.get("delay"):
                     f.host_overrides[host_key(urlparse(s_["url"]).netloc)] = float(s_["delay"])
             log.info("[Stage 1] Discovery")
             cands = pending + await _discover_all(f, crawl_now, cutoff, registry, use_indexes, stats, diag)
             update_source_health(conn, crawl_now, diag)
+            save_robots_cache(conn, f.robots_cache)
             await process_candidates(conn, f, cands, cutoff, stats, deadline=deadline)
+            save_robots_cache(conn, f.robots_cache)
             stats["http_requests"] = f.requests
         finished = True
     finally:
@@ -2681,7 +2898,7 @@ async def run(sources: Optional[list] = None, transport: Optional[httpx.AsyncBas
     if skipped:
         log.info(f"Outlets rested this run ({len(skipped)}) — blocked us {SKIP_AFTER_FAILURES} runs in a row; retried automatically:")
         for name, (until, why) in sorted(skipped.items()):
-            log.info(f"  - {name} (until {until[:10]}): {why.split(';')[0]}")
+            log.info(f"  - {name} (until {until[:10]}): {why}")
     if per_source:
         log.info("Saved this run by outlet: " + ", ".join(f"{s_} {n}" for s_, n in per_source[:25])
                  + (" …" if len(per_source) > 25 else ""))
@@ -2706,13 +2923,14 @@ async def collect_terms(terms: list[str], days: int, transport: Optional[httpx.A
     use_registry(active_registry(conn))
     stats: Counter = Counter()
     async with make_client(transport) as client:
-        f = Fetcher(client)
+        f = Fetcher(client, load_robots_cache(conn))
         cands = []
         if ENABLE_GDELT:
             cands += await discover_gdelt(f, terms, hours=days * 24, deadline=time.monotonic() + 600)
         if ENABLE_GNEWS:
             cands += await discover_google_news(f, {t: {} for t in terms}, days=days, all_editions=True)
         await process_candidates(conn, f, cands, cutoff, stats)
+        save_robots_cache(conn, f.robots_cache)
         stats["http_requests"] = f.requests
     conn.close()
     return stats
@@ -2740,8 +2958,9 @@ async def ingest_urls(urls: list[str], days: int = 120, transport: Optional[http
                                tier=info.get("tier", ""), via="manual"))
     stats: Counter = Counter()
     async with make_client(transport) as client:
-        f = Fetcher(client)
+        f = Fetcher(client, load_robots_cache(conn))
         await process_candidates(conn, f, cands, cutoff, stats)
+        save_robots_cache(conn, f.robots_cache)
         stats["http_requests"] = f.requests
     export_csvs(conn)
     conn.close()
