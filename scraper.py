@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import csv
 import datetime as dt
@@ -36,16 +37,14 @@ EXPORT_DAYS = int(os.getenv("MP_EXPORT_DAYS", "30"))
 LOOKBACK_HOURS = int(os.getenv("MP_LOOKBACK_HOURS", "48"))
 MAX_URLS_PER_SOURCE = int(os.getenv("MP_MAX_URLS_PER_SOURCE", "150"))
 MAX_FETCH = int(os.getenv("MP_MAX_FETCH", "6000"))
-# Time budget for one run (minutes). The crawl stops starting new fetches when it runs out,
-# saves everything, and queues the unfetched URLs for the next run — so a run can never be
-# killed by the CI job limit before it saves. Discovery gets its own, smaller budget.
+
 TIME_BUDGET_MIN = float(os.getenv("MP_TIME_BUDGET_MIN", "100"))
 DISCOVERY_BUDGET_MIN = float(os.getenv("MP_DISCOVERY_BUDGET_MIN", "15"))
-SOURCE_DISCOVERY_TIMEOUT = float(os.getenv("MP_SOURCE_DISCOVERY_TIMEOUT", "240"))   # seconds per outlet
-MAX_PER_HOST = int(os.getenv("MP_MAX_PER_HOST", "60"))          # article fetches per site per run
+SOURCE_DISCOVERY_TIMEOUT = float(os.getenv("MP_SOURCE_DISCOVERY_TIMEOUT", "240")) 
+MAX_PER_HOST = int(os.getenv("MP_MAX_PER_HOST", "60"))          
 PENDING_MAX_AGE_DAYS = 3
-SKIP_AFTER_FAILURES = 3        # an outlet that blocks us this many runs in a row ...
-SKIP_DAYS = 7                  # ... is skipped for this many days, then retried
+SKIP_AFTER_FAILURES = 3        
+SKIP_DAYS = 7                  
 MAX_SITEMAPS = int(os.getenv("MP_MAX_SITEMAPS", "6"))
 CONCURRENCY = int(os.getenv("MP_CONCURRENCY", "24"))
 DOMAIN_DELAY = float(os.getenv("MP_DOMAIN_DELAY", "2.0"))
@@ -169,6 +168,24 @@ MONITORING_TARGETS = {
     "East Africa Economy": [
         "East African Community", "EAC", "Kenya economy", "Uganda economy",
         "Tanzania economy", "Rwanda economy", "Central Bank of Kenya",
+    ],
+    # ── AWF client tracking (added from the September 2026 coverage report) ──
+    # AWF spokespeople: op-eds and interviews often name the author but mention
+    # "African Wildlife Foundation" only in a byline, or not at all.
+    "AWF Spokespeople": [
+        "Kaddu Sebunya", "Charly Facheux", "Nancy Githaiga", "Patrick Nsabimana",
+        "Anthony Agbor", "Norbert Sonne", "Didi Wamukoya", "Antoine Tabu", "Nakedi Maputla",
+    ],
+    # AWF landscapes and programmes: associated coverage even when AWF isn't named
+    "AWF Landscapes & Programmes": [
+        "Faro National Park", "parc national de Faro", "Campo-Ma'an", "Campo Ma'an",
+        "Volcanoes National Park", "Kwita Izina", "Kidepo", "Lobito Corridor", "corridor de Lobito",
+        "Mount Kilimanjaro", "mountain gorilla", "wildlife economy",
+    ],
+    "Africa Conservation & Wildlife": [
+        "wildlife conservation", "wildlife corridor", "wildlife corridors", "human-wildlife conflict",
+        "wildlife trafficking", "natural capital", "biodiversity finance", "rewilding",
+        "community conservancy", "conservation de la faune", "capital naturel",
     ],
 }
 
@@ -363,8 +380,16 @@ BRANDS = {
                          "aliases": ["Gates Foundation", "Bill & Melinda Gates Foundation"]},
     "Rockefeller Foundation": {"country": "PAN", "sector": "Philanthropy", "aliases": ["Rockefeller Foundation"]},
     "Ford Foundation": {"country": "PAN", "sector": "Philanthropy", "aliases": ["Ford Foundation"]},
+    # AWF: spokespeople are aliases so op-eds and interviews by AWF staff count as AWF coverage
+    # even when the article names only the author. The context words stop other "AWF"s matching.
     "African Wildlife Foundation": {"country": "PAN", "sector": "Philanthropy",
-                                    "aliases": ["African Wildlife Foundation", "AWF"]},
+                                    "aliases": ["African Wildlife Foundation", "AWF",
+                                                "Kaddu Sebunya", "Charly Facheux", "Nancy Githaiga",
+                                                "Patrick Nsabimana", "Anthony Agbor", "Norbert Sonne",
+                                                "Didi Wamukoya", "Antoine Tabu", "Nakedi Maputla"],
+                                    "context": ["African Wildlife Foundation", "wildlife", "conservation",
+                                                "biodiversity", "national park", "faune", "parc national",
+                                                "natural capital", "capital naturel", "gorilla", "corridor"]},
     "Science for Africa Foundation": {"country": "PAN", "sector": "Philanthropy",
                                       "aliases": ["Science for Africa Foundation"]},
     "World Bank": {"country": "PAN", "sector": "DFI",
@@ -376,25 +401,6 @@ BRANDS = {
     "GIZ": {"country": "PAN", "sector": "Development", "aliases": ["GIZ"]},
     "FCDO": {"country": "PAN", "sector": "Development", "aliases": ["FCDO"]},
 }
-
-# ─────────────────────────────────────────────────────────────
-# SOURCES — the crawler only needs the homepage. It discovers
-# sitemaps (via robots.txt) and RSS/Atom feeds automatically.
-#   feeds  : optional; add one when auto-discovery misses it.
-#   path   : a URL with a path (e.g. bbc.com/swahili) restricts the
-#            crawl to that section.
-#   hosts  : optional extra hostnames the outlet publishes on (e.g. BBC feeds link to bbc.co.uk).
-#   delay  : optional seconds between requests for sites that rate-limit (HTTP 429).
-#   discovery_timeout : optional seconds for very slow sites (default 240).
-#   tier   : how much weight a mention here deserves in reports.
-#            national     — major national newspaper / broadcaster / agency
-#            trade        — business, sector or specialist title
-#            digital      — smaller online-only outlet or blog
-#            syndication  — republishes press releases / other outlets' copy
-#            international— non-African outlet (Africa section only)
-#   crawl  : False = don't crawl; articles from this domain that arrive
-#            via GDELT / Google News / NewsAPI are still tagged with it.
-# Articles from domains not listed here get tier "unlisted".
 # ─────────────────────────────────────────────────────────────
 SOURCES = [
     # ── Kenya ────────────────────────────────────────────────
@@ -793,6 +799,76 @@ SOURCES = [
     {"name": "inkl", "url": "https://www.inkl.com", "country": "GB", "lang": "en", "tier": "syndication", "crawl": False},
     {"name": "Europe Says", "url": "https://www.europesays.com", "country": "EU", "lang": "en", "tier": "syndication",
      "crawl": False},
+
+    # ══ ADDED FROM MEDIA LIST 2026 (DC) ══════════════════════════════════════
+    # ── Requested additions ──────────────────────────────────
+    {"name": "CGTN Africa", "url": "https://africa.cgtn.com", "country": "PAN", "lang": "en", "tier": "international"},
+    {"name": "CGTN", "url": "https://www.cgtn.com", "country": "CN", "lang": "en", "tier": "international",
+     "hosts": ["news.cgtn.com"]},
+    {"name": "RBA (Rwanda Broadcasting Agency)", "url": "https://www.rba.co.rw", "country": "RW", "lang": "en",
+     "tier": "national"},
+    {"name": "The Guardian Post (Cameroon)", "url": "https://theguardianpostcameroon.com", "country": "CM",
+     "lang": "en", "tier": "national"},
+    # Reuters and the FT block crawlers and sit behind paywalls: not crawled, but tagged when GDELT surfaces them
+    {"name": "Reuters", "url": "https://www.reuters.com", "country": "GB", "lang": "en", "tier": "international",
+     "crawl": False},
+    {"name": "Financial Times", "url": "https://www.ft.com", "country": "GB", "lang": "en", "tier": "international",
+     "crawl": False},
+    # ── Kenya ────────────────────────────────────────────────
+    {"name": "NTV Kenya", "url": "https://ntvkenya.co.ke", "country": "KE", "lang": "en", "tier": "national"},
+    {"name": "TV47", "url": "https://www.tv47.digital", "country": "KE", "lang": "en", "tier": "national"},
+    {"name": "Africa Uncensored", "url": "https://africauncensored.online", "country": "KE", "lang": "en",
+     "tier": "digital"},
+    # ── Tanzania / Rwanda ────────────────────────────────────
+    {"name": "TBC (Tanzania Broadcasting Corporation)", "url": "https://www.tbc.go.tz", "country": "TZ", "lang": "sw",
+     "tier": "national"},
+    # ── Nigeria ──────────────────────────────────────────────
+    {"name": "NTA (Nigerian Television Authority)", "url": "https://www.nta.ng", "country": "NG", "lang": "en",
+     "tier": "national"},
+    # ── Cameroon / Senegal ───────────────────────────────────
+    {"name": "CRTV", "url": "https://www.crtv.cm", "country": "CM", "lang": "fr", "tier": "national"},
+    {"name": "RTS (Sénégal)", "url": "https://www.rts.sn", "country": "SN", "lang": "fr", "tier": "national"},
+    {"name": "SenePlus", "url": "https://www.seneplus.com", "country": "SN", "lang": "fr", "tier": "digital"},
+    {"name": "Ouestaf News", "url": "https://www.ouestaf.com", "country": "SN", "lang": "fr", "tier": "digital"},
+    # ── Southern Africa ──────────────────────────────────────
+    {"name": "Daily Nation (Zambia)", "url": "https://dailynationzambia.com", "country": "ZM", "lang": "en",
+     "tier": "national"},
+    {"name": "Zambian Business Times", "url": "https://zambianbusinesstimes.com", "country": "ZM", "lang": "en",
+     "tier": "trade"},
+    {"name": "CITE (Zimbabwe)", "url": "https://cite.org.zw", "country": "ZW", "lang": "en", "tier": "digital"},
+    {"name": "Health Times (Zimbabwe)", "url": "https://healthtimes.co.zw", "country": "ZW", "lang": "en",
+     "tier": "trade"},
+    {"name": "Midweek Sun", "url": "https://www.midweeksun.co.bw", "country": "BW", "lang": "en", "tier": "national"},
+    {"name": "Republikein", "url": "https://www.republikein.com.na", "country": "NA", "lang": "af", "tier": "national"},
+    {"name": "Oxpeckers", "url": "https://oxpeckers.org", "country": "ZA", "lang": "en", "tier": "trade"},
+    {"name": "The Continent", "url": "https://www.thecontinent.org", "country": "ZA", "lang": "en", "tier": "trade"},
+    {"name": "Rádio Moçambique", "url": "https://www.rm.co.mz", "country": "MZ", "lang": "pt", "tier": "national"},
+    # ── Pan-African / international / specialist ────────────
+    {"name": "TRT Afrika", "url": "https://www.trtafrika.com", "country": "PAN", "lang": "en",
+     "tier": "international"},
+    {"name": "Al Jazeera", "url": "https://www.aljazeera.com", "country": "QA", "lang": "en", "tier": "international",
+     "feeds": ["https://www.aljazeera.com/xml/rss/all.xml"]},
+    {"name": "AP News", "url": "https://apnews.com", "country": "US", "lang": "en", "tier": "international"},
+    {"name": "DW (English)", "url": "https://www.dw.com/en", "country": "DE", "lang": "en", "tier": "international",
+     "feeds": ["https://rss.dw.com/rdf/rss-en-africa"]},
+    {"name": "DW Afrique", "url": "https://www.dw.com/fr", "country": "DE", "lang": "fr", "tier": "international"},
+    {"name": "ChinAfrica Magazine", "url": "http://www.chinafrica.cn", "country": "CN", "lang": "en", "tier": "trade"},
+    {"name": "Climate Home News", "url": "https://www.climatechangenews.com", "country": "GB", "lang": "en",
+     "tier": "trade"},
+    {"name": "Mongabay", "url": "https://news.mongabay.com", "country": "US", "lang": "en", "tier": "trade"},
+    {"name": "Devex", "url": "https://www.devex.com", "country": "US", "lang": "en", "tier": "trade"},
+    {"name": "Drilled", "url": "https://drilled.media", "country": "US", "lang": "en", "tier": "trade"},
+    {"name": "FAIR (Forum for African Investigative Reporters)", "url": "https://fairreporters.net", "country": "PAN",
+     "lang": "en", "tier": "trade"},
+    {"name": "VICE News", "url": "https://www.vice.com", "country": "US", "lang": "en", "tier": "international",
+     "crawl": False},
+    # ══ ADDED FROM AWF SEPTEMBER 2026 COVERAGE REPORT ════════════════════════
+    {"name": "La Fortune RDC", "url": "https://lafortunerdc.net", "country": "CD", "lang": "fr", "tier": "digital"},
+    {"name": "Geopolis Magazine", "url": "https://geopolismagazine.org", "country": "CD", "lang": "fr", "tier": "trade"},
+    # Kenya Airways inflight magazine: digital edition sits behind a reader app, so it is not crawled.
+    # Add placement links with:  python scraper.py --urls placements.txt
+    {"name": "Msafiri (Kenya Airways)", "url": "https://pocketmags.com/us/msafiri-kenya-airways-inflight-magazine",
+     "country": "KE", "lang": "en", "tier": "trade", "crawl": False},
 ]
 
 # Google News editions queried with country-specific brand names: (gl, language)
@@ -818,7 +894,10 @@ CATEGORY_WORDS_AFRICAN = {
     "Business": ["tattalin arziki", "kasuwanci", "dhaqaalaha", "ganacsi", "ekonomie", "besigheid", "economia",
                  "investimento", "mercado", "ኢኮኖሚ", "ኢንቨስትመንት", "اقتصاد", "استثمار"],
     "Climate & Environment": ["ambaliya", "abaar", "fatahaad", "droogte", "klimaat", "seca", "cheias", "clima",
-                              "ድርቅ", "ጎርፍ", "جفاف", "فيضانات", "مناخ"],
+                              "ድርቅ", "ጎርፍ", "جفاف", "فيضانات", "مناخ",
+                              # conservation coverage (AWF) — otherwise filed as "General"
+                              "wildlife", "conservation", "biodiversity", "national park", "poaching",
+                              "faune", "parc national", "biodiversité", "wanyamapori", "uhifadhi"],
     "Education": ["ilimi", "makaranta", "ile-iwe", "waxbarasho", "onderwys", "skool", "educação", "escola",
                   "universidade", "ትምህርት", "تعليم", "جامعة"],
     "Agriculture": ["noma", "manoma", "beeraha", "landbou", "agricultura", "agricultores", "ግብርና", "زراعة"],
@@ -851,9 +930,9 @@ UNDETECTABLE = {"ti", "wo", "luo", "tw", "ak", "ee", "ny", "bm", "rn", "nd", "tn
 _LANG_ALIAS = {"arz": "ar", "ary": "ar", "apc": "ar", "ki": "kik", "fuv": "ff", "gug": "gn",
                "iw": "he", "in": "id"}
 
-_ETHIOPIC = re.compile(r"[ሀ-፿ᎀ-᎟ⶀ-⷟]")
-_ARABIC = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿ]")
-_TASHKEEL = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭـ]")
+_ETHIOPIC = re.compile(r"[\u1200-\u137f\u1380-\u139f\u2d80-\u2ddf]")
+_ARABIC = re.compile(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]")
+_TASHKEEL = re.compile(r"[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed\u0640]")   # escapes: copy/paste reorders these marks
 
 
 def normalize_lang(code: Optional[str]) -> str:
@@ -2639,9 +2718,56 @@ async def collect_terms(terms: list[str], days: int, transport: Optional[httpx.A
     return stats
 
 
+# ─────────────────────────────────────────────
+# ADDED: INGEST KNOWN PLACEMENT LINKS (e.g. from a monthly coverage report)
+# ─────────────────────────────────────────────
+async def ingest_urls(urls: list[str], days: int = 120, transport: Optional[httpx.AsyncBaseTransport] = None,
+                      db_path: str = DB_PATH) -> Counter:
+    """Fetch and store specific article links, even if they are older than LOOKBACK_HOURS.
+    Clears each link from seen_urls first: a placement once skipped as "too old" would
+    otherwise be ignored forever. Exports the CSVs afterwards."""
+    cutoff = now_utc() - dt.timedelta(days=days)
+    conn = db_connect(db_path)
+    use_registry(active_registry(conn))
+    clean = list(dict.fromkeys(u for u in (canonicalize(x) for x in urls) if u))
+    conn.executemany("DELETE FROM seen_urls WHERE url = ?", [(u,) for u in clean])
+    conn.commit()
+    cands = []
+    for u in clean:
+        info = source_info(u) or {}
+        cands.append(Candidate(url=u, source=info.get("name") or host_key(urlparse(u).netloc),
+                               country=info.get("country", ""), lang=info.get("lang", ""),
+                               tier=info.get("tier", ""), via="manual"))
+    stats: Counter = Counter()
+    async with make_client(transport) as client:
+        f = Fetcher(client)
+        await process_candidates(conn, f, cands, cutoff, stats)
+        stats["http_requests"] = f.requests
+    export_csvs(conn)
+    conn.close()
+    log.info(f"[Ingest] {len(clean)} links: saved {stats['saved']}, {stats['brand_mentions']} brand mentions; "
+             f"stats {dict(stats)}")
+    return stats
+
+
+def _read_url_file(path: str) -> list[str]:
+    with open(path, encoding="utf-8") as fh:
+        return [ln.strip() for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
+
+
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="MediaPulse Africa pipeline")
+    ap.add_argument("--urls", help="text file of article links (one per line) to fetch and store now")
+    ap.add_argument("--terms", nargs="+", help="search GDELT for these names over --days and store the articles")
+    ap.add_argument("--days", type=int, default=120, help="how far back --urls / --terms may reach (default 120)")
+    args = ap.parse_args()
     try:
-        asyncio.run(run())
+        if args.urls:
+            asyncio.run(ingest_urls(_read_url_file(args.urls), days=args.days))
+        elif args.terms:
+            print(dict(asyncio.run(collect_terms(args.terms, days=min(args.days, 90)))))
+        else:
+            asyncio.run(run())
     except Exception as e:
         log.critical(f"Pipeline terminated: {e}", exc_info=True)
         raise SystemExit(1)
