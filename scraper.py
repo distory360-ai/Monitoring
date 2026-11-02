@@ -250,7 +250,7 @@ BRANDS = {
 
     # ── NIGERIA ──────────────────────────────────────────────
     "Dangote Group": {"country": "NG", "sector": "Industrial",
-                      "aliases": ["Dangote", "Dangote Group", "Dangote Cement", "Dangote Refinery"]},
+                      "aliases": ["Dangote", "Dangote Group", "Dangote Cement", "Dangote Refinery", "دانغوتي"]},
     "BUA Group": {"country": "NG", "sector": "Industrial", "aliases": ["BUA Group", "BUA Cement", "BUA Foods"]},
     "Globacom": {"country": "NG", "sector": "Telecom", "aliases": ["Globacom", "Glo"],
                  "context": ["telecom", "network", "subscribers", "mobile", "Globacom", "data"]},
@@ -358,8 +358,8 @@ BRANDS = {
     "CIB Egypt": {"country": "EG", "sector": "Banking",
                   "aliases": ["Commercial International Bank", "CIB Egypt", "البنك التجاري الدولي"]},
     "Fawry": {"country": "EG", "sector": "Fintech", "aliases": ["Fawry"]},
-    "Jumia": {"country": "PAN", "sector": "E-commerce", "aliases": ["Jumia"]},
-    "Ecobank": {"country": "PAN", "sector": "Banking", "aliases": ["Ecobank"]},
+    "Jumia": {"country": "PAN", "sector": "E-commerce", "aliases": ["Jumia", "جوميا"]},
+    "Ecobank": {"country": "PAN", "sector": "Banking", "aliases": ["Ecobank", "إيكوبنك"]},
     "Afreximbank": {"country": "PAN", "sector": "DFI", "aliases": ["Afreximbank"]},
     "African Development Bank": {"country": "PAN", "sector": "DFI",
                                  "aliases": ["African Development Bank", "AfDB", "Banque africaine de développement",
@@ -390,7 +390,8 @@ BRANDS = {
 
     # ── FOUNDATIONS / DEVELOPMENT ────────────────────────────
     "Mastercard Foundation": {"country": "PAN", "sector": "Philanthropy",
-                              "aliases": ["Mastercard Foundation", "Fondation Mastercard", "Fundação Mastercard"]},
+                              "aliases": ["Mastercard Foundation", "Fondation Mastercard", "Fundação Mastercard",
+                                          "مؤسسة ماستركارد"]},
     "Gates Foundation": {"country": "PAN", "sector": "Philanthropy",
                          "aliases": ["Gates Foundation", "Bill & Melinda Gates Foundation"]},
     "Rockefeller Foundation": {"country": "PAN", "sector": "Philanthropy", "aliases": ["Rockefeller Foundation"]},
@@ -437,7 +438,8 @@ SOURCES = [
     {"name": "Kenya Wallstreet", "url": "https://kenyawallstreet.com", "country": "KE", "lang": "en",
      "tier": "trade", "feeds": ["https://kenyawallstreet.com/feed/"]},
     {"name": "The EastAfrican", "url": "https://www.theeastafrican.co.ke", "country": "KE", "lang": "en", "tier": "national"},
-    {"name": "Taifa Leo", "url": "https://taifaleo.nation.co.ke", "country": "KE", "lang": "sw", "tier": "national"},
+    {"name": "Taifa Leo", "url": "https://taifaleo.nation.co.ke", "country": "KE", "lang": "sw", "tier": "national",
+     "feeds": ["https://taifaleo.nation.co.ke/feed"]},
     {"name": "BBC Swahili", "url": "https://www.bbc.com/swahili", "country": "PAN", "lang": "sw", "tier": "international",
      "feeds": ["https://feeds.bbci.co.uk/swahili/rss.xml"]},
 
@@ -458,7 +460,10 @@ SOURCES = [
 
     # ── Tanzania / Rwanda / Ethiopia ─────────────────────────
     {"name": "The Citizen TZ", "url": "https://www.thecitizen.co.tz", "country": "TZ", "lang": "en", "tier": "national"},
-    {"name": "Mwananchi", "url": "https://www.mwananchi.co.tz", "country": "TZ", "lang": "sw", "tier": "national"},
+    {"name": "Mwananchi", "url": "https://www.mwananchi.co.tz", "country": "TZ", "lang": "sw", "tier": "national",
+     "feeds": ["https://www.mwananchi.co.tz/rss.xml"]},
+    {"name": "Habari Leo", "url": "https://habarileo.co.tz", "country": "TZ", "lang": "sw", "tier": "national",
+     "feeds": ["https://habarileo.co.tz/feed"]},
     {"name": "Daily News TZ", "url": "https://dailynews.co.tz", "country": "TZ", "lang": "en", "tier": "national"},
     {"name": "The New Times", "url": "https://www.newtimes.co.rw", "country": "RW", "lang": "en", "tier": "national"},
     {"name": "Addis Standard", "url": "https://addisstandard.com", "country": "ET", "lang": "en", "tier": "national"},
@@ -586,15 +591,25 @@ SOURCES = [
      "feeds": ["https://feeds.bbci.co.uk/arabic/rss.xml"]},
     {"name": "DW Kiswahili", "url": "https://www.dw.com/sw", "country": "PAN", "lang": "sw", "tier": "international"},
     # Local-language press
-    {"name": "Aminiya", "url": "https://aminiya.ng", "country": "NG", "lang": "ha", "tier": "national"},
+    {"name": "Aminiya", "url": "https://aminiya.ng", "country": "NG", "lang": "ha", "tier": "national",
+     "feeds": ["https://aminiya.ng/feed"]},
     {"name": "Addis Admass", "url": "https://www.addisadmassnews.com", "country": "ET", "lang": "am", "tier": "national"},
     {"name": "Hiiraan Online", "url": "https://www.hiiraan.com", "country": "SO", "lang": "so", "tier": "national"},
     {"name": "Kigali Today", "url": "https://www.kigalitoday.com", "country": "RW", "lang": "rw", "tier": "national"},
+    {"name": "Imvaho Nshya", "url": "https://www.imvahonshya.co.rw", "country": "RW", "lang": "rw", "tier": "national",
+     "feeds": ["https://www.imvahonshya.co.rw/feed"]},
+    {"name": "RFI Kiswahili", "url": "https://www.rfi.fr/sw", "country": "PAN", "lang": "sw", "tier": "international",
+     "feeds": ["https://www.rfi.fr/sw/rss"]},
+    {"name": "Fana Afaan Oromoo", "url": "https://www.fanamc.com/afaanoromoo", "country": "ET", "lang": "om",
+     "tier": "national", "feeds": ["https://www.fanamc.com/afaanoromoo/feed/"]},
+    {"name": "Newsmada", "url": "https://newsmada.com", "country": "MG", "lang": "mg", "tier": "national",
+     "feeds": ["https://newsmada.com/feed"]},
     {"name": "Bukedde", "url": "https://www.bukedde.co.ug", "country": "UG", "lang": "lg", "tier": "national"},
     {"name": "Isolezwe", "url": "https://isolezwe.co.za", "country": "ZA", "lang": "zu", "tier": "national"},
     {"name": "Maroela Media", "url": "https://maroelamedia.co.za", "country": "ZA", "lang": "af", "tier": "national"},
     {"name": "Kwayedza", "url": "https://www.kwayedza.co.zw", "country": "ZW", "lang": "sn", "tier": "national"},
-    {"name": "Hespress (Arabic)", "url": "https://www.hespress.com", "country": "MA", "lang": "ar", "tier": "national"},
+    {"name": "Hespress (Arabic)", "url": "https://www.hespress.com", "country": "MA", "lang": "ar", "tier": "national",
+     "feeds": ["https://www.hespress.com/feed"]},
     {"name": "Youm7", "url": "https://www.youm7.com", "country": "EG", "lang": "ar", "tier": "national"},
     {"name": "Jornal de Angola", "url": "https://www.jornaldeangola.ao", "country": "AO", "lang": "pt", "tier": "national"},
     {"name": "Novo Jornal", "url": "https://novojornal.co.ao", "country": "AO", "lang": "pt", "tier": "national"},
@@ -623,7 +638,8 @@ SOURCES = [
      "tier": "national"},
     {"name": "Addis Fortune", "url": "https://addisfortune.news", "country": "ET", "lang": "en", "tier": "trade"},
     {"name": "Capital Ethiopia", "url": "https://www.capitalethiopia.com", "country": "ET", "lang": "en", "tier": "trade"},
-    {"name": "Fana Broadcasting", "url": "https://www.fanabc.com", "country": "ET", "lang": "en", "tier": "national"},
+    {"name": "Fana Broadcasting", "url": "https://www.fanabc.com", "country": "ET", "lang": "en", "tier": "national",
+     "hosts": ["fanamc.com"]},  # fanabc.com now redirects to fanamc.com
     {"name": "Ethiopian News Agency", "url": "https://www.ena.et", "country": "ET", "lang": "en", "tier": "national"},
     {"name": "Garowe Online", "url": "https://www.garoweonline.com", "country": "SO", "lang": "en", "tier": "national"},
     {"name": "Horseed Media", "url": "https://horseedmedia.net", "country": "SO", "lang": "en", "tier": "digital"},
@@ -708,6 +724,16 @@ SOURCES = [
      "tier": "national"},
     {"name": "L'Express Maurice", "url": "https://lexpress.mu", "country": "MU", "lang": "fr", "tier": "national"},
     {"name": "Defimedia", "url": "https://defimedia.info", "country": "MU", "lang": "fr", "tier": "national"},
+    {"name": "2424.mg", "url": "https://www.2424.mg", "country": "MG", "lang": "fr", "tier": "digital",
+     "feeds": ["https://www.2424.mg/feed"]},
+    {"name": "Madagascar Tribune", "url": "https://www.madagascar-tribune.com", "country": "MG", "lang": "fr",
+     "tier": "national", "feeds": ["https://www.madagascar-tribune.com/spip.php?page=backend"]},
+    {"name": "Clicanoo", "url": "https://www.clicanoo.re", "country": "RE", "lang": "fr", "tier": "national",
+     "feeds": ["https://www.clicanoo.re/rss"]},
+    {"name": "Comores Infos", "url": "https://www.comoresinfos.net", "country": "KM", "lang": "fr", "tier": "digital",
+     "feeds": ["https://www.comoresinfos.net/feed"]},
+    {"name": "Iwacu", "url": "https://www.iwacu-burundi.org", "country": "BI", "lang": "fr", "tier": "national",
+     "feeds": ["https://www.iwacu-burundi.org/feed"]},
     # ── Southern Africa ──────────────────────────────────────
     {"name": "TimesLIVE", "url": "https://www.timeslive.co.za", "country": "ZA", "lang": "en", "tier": "national"},
     {"name": "BusinessLIVE", "url": "https://www.businesslive.co.za", "country": "ZA", "lang": "en", "tier": "national"},
@@ -741,6 +767,8 @@ SOURCES = [
     {"name": "The Nation (Malawi)", "url": "https://mwnation.com", "country": "MW", "lang": "en", "tier": "national"},
     {"name": "Times 360 Malawi", "url": "https://times.mw", "country": "MW", "lang": "en", "tier": "national",
      "crawl": False},  # robots.txt disallows crawlers
+    {"name": "MBC (Malawi)", "url": "https://www.mbc.mw", "country": "MW", "lang": "en", "tier": "national",
+     "feeds": ["https://www.mbc.mw/feed"]},
     {"name": "Club of Mozambique", "url": "https://clubofmozambique.com", "country": "MZ", "lang": "en", "tier": "trade"},
     {"name": "ANGOP", "url": "https://www.angop.ao", "country": "AO", "lang": "pt", "tier": "national"},
     {"name": "Expansão", "url": "https://expansao.co.ao", "country": "AO", "lang": "pt", "tier": "trade"},
@@ -892,6 +920,51 @@ SOURCES = [
     # Add placement links with:  python scraper.py --urls placements.txt
     {"name": "Msafiri (Kenya Airways)", "url": "https://pocketmags.com/us/msafiri-kenya-airways-inflight-magazine",
      "country": "KE", "lang": "en", "tier": "trade", "crawl": False},
+    # ══ ADDED NOV 2026 — languages of North, West, Central and Southern Africa (feeds checked 2026-11-02) ══
+    # ── North Africa: Arabic, French, Kabylie ─────────────────
+    {"name": "Echorouk", "url": "https://www.echoroukonline.com", "country": "DZ", "lang": "ar", "tier": "national",
+     "feeds": ["https://www.echoroukonline.com/feed"]},
+    {"name": "El Khabar", "url": "https://www.elkhabar.com", "country": "DZ", "lang": "ar", "tier": "national",
+     "feeds": ["https://www.elkhabar.com/feed"]},
+    {"name": "Tamurt", "url": "https://www.tamurt.info", "country": "DZ", "lang": "fr", "tier": "digital",
+     "feeds": ["https://www.tamurt.info/feed"]},          # Kabylie news
+    {"name": "Hespress FR", "url": "https://fr.hespress.com", "country": "MA", "lang": "fr", "tier": "national",
+     "feeds": ["https://fr.hespress.com/feed"]},
+    {"name": "Amadal Amazigh", "url": "https://amadalamazigh.press.ma", "country": "MA", "lang": "ar", "tier": "digital",
+     "feeds": ["https://amadalamazigh.press.ma/feed"]},     # Amazigh affairs, written mostly in Arabic
+    {"name": "Mosaïque FM", "url": "https://www.mosaiquefm.net/ar", "country": "TN", "lang": "ar", "tier": "national",
+     "feeds": ["https://www.mosaiquefm.net/ar/rss"]},
+    {"name": "Dabanga (Arabic)", "url": "https://www.dabangasudan.org/ar", "country": "SD", "lang": "ar", "tier": "national",
+     "feeds": ["https://www.dabangasudan.org/ar/feed"]},
+    {"name": "Sahara Medias", "url": "https://saharamedias.net", "country": "MR", "lang": "ar", "tier": "national",
+     "feeds": ["https://saharamedias.net/feed"]},
+    # ── West Africa: Hausa, Bambara, Fulfulde ─────────────────
+    {"name": "RFI Hausa", "url": "https://www.rfi.fr/ha", "country": "NG", "lang": "ha", "tier": "international",
+     "feeds": ["https://www.rfi.fr/ha/rss"]},
+    {"name": "RFI Mandenkan", "url": "https://www.rfi.fr/ma", "country": "ML", "lang": "bm", "tier": "international",
+     "feeds": ["https://www.rfi.fr/ma/rss"]},
+    {"name": "RFI Fulfulde", "url": "https://www.rfi.fr/ff", "country": "PAN", "lang": "ff", "tier": "international",
+     "feeds": ["https://www.rfi.fr/ff/rss"]},
+    {"name": "Legit Hausa", "url": "https://hausa.legit.ng", "country": "NG", "lang": "ha", "tier": "digital",
+     "feeds": ["https://hausa.legit.ng/rss/all.rss"]},
+    {"name": "Studio Tamani", "url": "https://www.studiotamani.org", "country": "ML", "lang": "fr", "tier": "national",
+     "feeds": ["https://www.studiotamani.org/feed"]},
+    # ── Central Africa: French, Portuguese ────────────────────
+    {"name": "Gabonreview", "url": "https://www.gabonreview.com", "country": "GA", "lang": "fr", "tier": "national",
+     "crawl": False},  # robots.txt disallows crawlers; still tagged when GDELT finds it
+    {"name": "Radio Ndeke Luka", "url": "https://www.radiondekeluka.org", "country": "CF", "lang": "fr", "tier": "national",
+     "feeds": ["https://www.radiondekeluka.org/rss"]},
+    {"name": "Corbeau News Centrafrique", "url": "https://corbeaunews-centrafrique.org", "country": "CF", "lang": "fr",
+     "tier": "digital", "feeds": ["https://corbeaunews-centrafrique.org/feed"]},
+    {"name": "Tchadinfos", "url": "https://tchadinfos.com", "country": "TD", "lang": "fr", "tier": "digital",
+     "feeds": ["https://tchadinfos.com/feed"]},
+    {"name": "Téla Nón", "url": "https://www.telanon.info", "country": "ST", "lang": "pt", "tier": "national",
+     "feeds": ["https://www.telanon.info/feed"]},
+    # ── Southern Africa: Zulu, English ────────────────────────
+    {"name": "Ilanga", "url": "https://ilanganews.co.za", "country": "ZA", "lang": "zu", "tier": "national",
+     "feeds": ["https://ilanganews.co.za/feed"]},
+    {"name": "NBC Namibia", "url": "https://nbcnews.na", "country": "NA", "lang": "en", "tier": "national",
+     "feeds": ["https://nbcnews.na/rss.xml"]},
 ]
 
 # Google News editions queried with country-specific brand names: (gl, language)
@@ -942,12 +1015,47 @@ LANGUAGE_NAMES = {
     "zu": "Zulu", "xh": "Xhosa", "af": "Afrikaans", "st": "Sesotho", "nso": "Sepedi", "tn": "Setswana",
     "ln": "Lingala", "kik": "Gikuyu", "luo": "Dholuo", "mg": "Malagasy", "wo": "Wolof", "ff": "Fulfulde",
     "fuv": "Fulfulde", "tw": "Twi", "ak": "Akan", "ee": "Ewe", "ny": "Chichewa", "bm": "Bambara",
-    "kab": "Kabyle", "ber": "Amazigh", "und": "Unknown",
+    "kab": "Kabyle", "ber": "Amazigh",
+    # Kenya / Tanzania community languages
+    "luy": "Luhya", "kam": "Kamba", "guz": "Ekegusii", "mer": "Kimeru", "kln": "Kalenjin", "mas": "Maasai",
+    "suk": "Sukuma", "hay": "Haya", "nym": "Nyamwezi", "gog": "Gogo", "jmc": "Chagga",
+    # Rest of East Africa and the Indian Ocean
+    "nyn": "Runyankole", "xog": "Lusoga", "ach": "Acholi", "teo": "Ateso", "aa": "Afar", "sid": "Sidamo",
+    "wal": "Wolaytta", "tig": "Tigre", "vmw": "Emakhuwa", "seh": "Sena", "ts": "Xitsonga", "bem": "Bemba",
+    "toi": "Tonga", "loz": "Lozi", "din": "Dinka", "nus": "Nuer", "pga": "Juba Arabic", "mfe": "Mauritian Creole",
+    "crs": "Seychellois Creole", "rcf": "Reunion Creole", "zdj": "Comorian", "swb": "Shimaore",
+    # North, West, Central and Southern Africa
+    "zgh": "Tamazight", "tzm": "Central Atlas Tamazight", "shi": "Tachelhit", "rif": "Tarifit", "mey": "Hassaniya",
+    "dyu": "Dioula", "mos": "Mooré", "kr": "Kanuri", "kri": "Krio", "mnk": "Mandinka", "fon": "Fon", "dje": "Zarma",
+    "kea": "Cape Verdean Creole", "gaa": "Ga", "dag": "Dagbani", "kg": "Kikongo", "lua": "Tshiluba", "sg": "Sango",
+    "ewo": "Ewondo", "fan": "Fang", "es": "Spanish", "umb": "Umbundu", "kmb": "Kimbundu", "ng": "Oshindonga",
+    "kj": "Oshikwanyama", "hz": "Otjiherero", "ve": "Tshivenda", "ss": "siSwati", "nr": "isiNdebele", "tum": "Chitumbuka",
+    # Every other African language with ~1M+ speakers, so anything collected in them is named
+    "shy": "Chaouia", "tmh": "Tuareg (Tamasheq)", "hdy": "Hadiyya", "sgw": "Sebat Bet Gurage", "gmv": "Gamo",
+    "drs": "Gedeo", "xst": "Silt'e", "bej": "Beja", "zne": "Zande", "nyf": "Mijikenda", "tuv": "Turkana",
+    "haq": "Ha", "nyy": "Nyakyusa", "kde": "Makonde", "cgg": "Rukiga", "laj": "Lango", "ktu": "Kituba",
+    "lu": "Luba-Katanga", "nnb": "Kinande", "shr": "Mashi", "nga": "Ngbaka", "wes": "Cameroonian Pidgin",
+    "sba": "Ngambay", "tiv": "Tiv", "ibb": "Ibibio", "anw": "Anaang", "igl": "Igala", "igb": "Ebira", "nup": "Nupe",
+    "gbr": "Gbagyi", "bin": "Edo", "urh": "Urhobo", "dga": "Dagaare", "abr": "Abron", "bci": "Baoulé",
+    "any": "Anyin", "sef": "Senufo", "snk": "Soninke", "son": "Songhay", "srr": "Serer", "emk": "Maninka",
+    "sus": "Susu", "men": "Mende", "tem": "Temne", "bba": "Bariba", "kbp": "Kabiyè", "pov": "Guinea-Bissau Creole",
+    "ndc": "Ndau", "yao": "Yao", "ngl": "Lomwe", "chw": "Chuwabo", "cce": "Chopi", "tsc": "Tswa", "cjk": "Chokwe",
+    "myx": "Lumasaba", "lgg": "Lugbara", "eto": "Eton", "ijc": "Izon", "ada": "Dangme", "gux": "Gourmanchéma", "kpe": "Kpelle",
+    "und": "Unknown",
 }
 
 # Languages py3langid has no model for — trust the page / source declaration for these.
 UNDETECTABLE = {"ti", "wo", "luo", "tw", "ak", "ee", "ny", "bm", "rn", "nd", "tn", "ts", "ve", "ss",
-                "kg", "ff", "ber", "tzm", "lua", "sg", "ki", "mer", "kam", "guz", "luy"}
+                "kg", "ff", "ber", "tzm", "lua", "sg", "ki", "kik", "mer", "kam", "guz", "luy",
+                "kln", "mas", "suk", "hay", "nym", "gog", "jmc", "nyn", "xog", "ach", "teo", "aa", "sid", "wal",
+                "tig", "vmw", "seh", "bem", "toi", "loz", "din", "nus", "pga", "mfe", "crs", "rcf", "zdj", "swb",
+                "zgh", "shi", "rif", "mey", "dyu", "mos", "kr", "kri", "mnk", "fon", "dje", "kea", "gaa", "dag", "ewo",
+                "fan", "umb", "kmb", "ng", "kj", "hz", "nr", "tum",
+                "shy", "tmh", "hdy", "sgw", "gmv", "drs", "xst", "bej", "zne", "nyf", "tuv", "myx", "haq",
+                "nyy", "kde", "cgg", "laj", "lgg", "ktu", "lu", "nnb", "shr", "nga", "eto", "wes", "sba",
+                "tiv", "ibb", "anw", "ijc", "igl", "igb", "nup", "gbr", "bin", "urh", "ada", "dga", "abr",
+                "bci", "any", "sef", "gux", "snk", "son", "srr", "emk", "sus", "kpe", "men", "tem", "bba",
+                "kbp", "pov", "ndc", "yao", "ngl", "chw", "cce", "tsc", "cjk"}
 
 # Detector variants folded into the code reports use
 _LANG_ALIAS = {"arz": "ar", "ary": "ar", "apc": "ar", "ki": "kik", "fuv": "ff", "gug": "gn",
@@ -1820,6 +1928,10 @@ GDELT_COUNTRY = {  # GDELT reports country names; the rest of the pipeline uses 
     "Cameroon": "CM", "Mali": "ML", "Burkina Faso": "BF", "Niger": "NE", "Guinea": "GN", "Gambia": "GM",
     "South Africa": "ZA", "Zambia": "ZM", "Zimbabwe": "ZW", "Botswana": "BW", "Namibia": "NA", "Malawi": "MW",
     "Mozambique": "MZ", "Angola": "AO", "Madagascar": "MG", "Mauritius": "MU", "Egypt": "EG", "Morocco": "MA",
+    "Eritrea": "ER", "Djibouti": "DJ", "Comoros": "KM", "Seychelles": "SC", "Reunion": "RE", "Mayotte": "YT",
+    "Mauritania": "MR", "Western Sahara": "EH", "Guinea-Bissau": "GW", "Cape Verde": "CV", "Chad": "TD",
+    "Central African Republic": "CF", "Equatorial Guinea": "GQ", "Sao Tome and Principe": "ST", "Lesotho": "LS",
+    "Swaziland": "SZ", "Eswatini": "SZ",
     "Algeria": "DZ", "Tunisia": "TN", "Libya": "LY", "Democratic Republic of the Congo": "CD",
     "Republic of the Congo": "CG", "Gabon": "GA", "United Kingdom": "GB", "United States": "US",
     "France": "FR", "India": "IN", "China": "CN", "United Arab Emirates": "AE",
